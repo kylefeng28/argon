@@ -1,14 +1,14 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! The Luau runtime for Argon programs: sandbox, API bindings, the frame
+//! protocol, error normalization and the program thread.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod api;
+pub mod docs;
+pub mod error;
+pub mod machine;
+pub mod program;
+pub mod runtime;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::ArgonError;
+pub use machine::{Flip, FrameAck, FrameOut, Machine, MachineOptions};
+pub use program::{spawn_program, ProgramExit, ProgramHandle, ProgramSpec};
+pub use runtime::Runtime;

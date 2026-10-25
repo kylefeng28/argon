@@ -1,0 +1,438 @@
+//! Lua bindings for the Argon API. Every function registered here must have
+//! an entry in [`crate::docs::API_DOCS`]; a test enforces it.
+
+use crate::error::BREAK_MARKER;
+use crate::machine::{FlipError, Machine};
+use argon_core::draw::DrawCmd;
+use argon_core::input::{KeyCode, PadButton};
+use argon_core::{Color, CELL_H, CELL_W};
+use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+pub const EXIT_MARKER: &str = "__argon_exit__";
+
+type M = Rc<RefCell<Machine>>;
+
+fn rt(msg: impl Into<String>) -> mlua::Error {
+    mlua::Error::RuntimeError(msg.into())
+}
+
+fn break_err() -> mlua::Error {
+    rt(BREAK_MARKER)
+}
+
+fn flip_result(r: Result<(), FlipError>) -> mlua::Result<()> {
+    match r {
+        Ok(()) => Ok(()),
+        Err(FlipError::Break) => Err(break_err()),
+        Err(FlipError::NotSupported) => Err(rt("flip() needs a running program. Save this as a program and use RUN.")),
+    }
+}
+
+/// Pixel coordinate from a Lua number (floor, like most retro APIs).
+fn px(v: f64) -> i32 {
+    if v.is_finite() {
+        v.floor().clamp(-1e6, 1e6) as i32
+    } else {
+        0
+    }
+}
+
+fn col(m: &Machine, v: Option<f64>) -> Color {
+    match v {
+        Some(c) if c.is_finite() => Color::from_u32(c.max(0.0).min(u32::MAX as f64) as u32),
+        _ => m.color,
+    }
+}
+
+fn color_num(c: Color) -> f64 {
+    c.to_u32() as f64
+}
+
+fn values_to_string(vals: &MultiValue) -> mlua::Result<String> {
+    let mut parts = Vec::with_capacity(vals.len());
+    for v in vals.iter() {
+        parts.push(match v {
+            Value::String(s) => s.to_str()?.to_string(),
+            Value::Nil => "nil".to_string(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Integer(i) => i.to_string(),
+            Value::Number(n) => fmt_number(*n),
+            other => other.to_string()?,
+        });
+    }
+    Ok(parts.join("\t"))
+}
+
+fn fmt_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
+}
+
+/// Register every API function into `lua`'s globals.
+#[allow(clippy::too_many_arguments)]
+pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
+    let g = lua.globals();
+    let mut names: Vec<&'static str> = Vec::new();
+
+    macro_rules! def {
+        ($name:literal, |$mm:ident $(, $arg:ident : $ty:ty)*| $body:block) => {{
+            let m2: M = m.clone();
+            names.push($name);
+            g.set($name, lua.create_function(move |_lua, ($($arg,)*): ($($ty,)*)| {
+                #[allow(unused_mut)]
+                let mut $mm = m2.borrow_mut();
+                $body
+            })?)?;
+        }};
+        ($name:literal, lua |$lua:ident, $mm:ident $(, $arg:ident : $ty:ty)*| $body:block) => {{
+            let m2: M = m.clone();
+            names.push($name);
+            g.set($name, lua.create_function(move |$lua, ($($arg,)*): ($($ty,)*)| {
+                #[allow(unused_mut)]
+                let mut $mm = m2.borrow_mut();
+                $body
+            })?)?;
+        }};
+    }
+
+    // ---- System ----
+    def!("flip", |mm| { flip_result(mm.do_flip()) });
+    def!("cls", |mm, c: Option<f64>| {
+        let color = match c { Some(v) => Color::from_u32(v.max(0.0) as u32), None => Color::BLACK };
+        mm.cmds.push(DrawCmd::Clear(color));
+        let (fg, bg) = (mm.grid.fg, mm.grid.bg);
+        mm.grid.clear_with(fg, bg);
+        Ok(())
+    });
+    def!("wait", |mm, secs: f64| {
+        let mut left = secs.max(0.0);
+        while left > 0.0 {
+            flip_result(mm.do_flip())?;
+            left -= mm.dt;
+        }
+        Ok(())
+    });
+    def!("time", |mm| { Ok(mm.time()) });
+    def!("delta_time", |mm| { Ok(mm.dt) });
+    def!("frame", |mm| { Ok(mm.frame) });
+    def!("fps", |mm, n: Option<f64>| {
+        if let Some(n) = n {
+            mm.fps = n.clamp(1.0, 240.0) as u32;
+        }
+        Ok(mm.fps)
+    });
+    def!("screen_size", |mm| { Ok((mm.width, mm.height)) });
+    def!("set_resolution", |mm, a: Value, b: Option<f64>| {
+        let (w, h) = match (&a, b) {
+            (Value::String(s), None) => {
+                let name = s.to_str()?.to_string();
+                argon_core::resolution_preset(&name)
+                    .ok_or_else(|| rt(format!("unknown resolution '{name}'; use tiny, retro, classic, hd or WxH")))?
+            }
+            (Value::Number(w), Some(h)) => (*w as u32, h as u32),
+            (Value::Integer(w), Some(h)) => (*w as u32, h as u32),
+            _ => return Err(rt("set_resolution(w, h) or set_resolution('preset')")),
+        };
+        if !(16..=8192).contains(&w) || !(16..=8192).contains(&h) {
+            return Err(rt("resolution must be between 16x16 and 8192x8192"));
+        }
+        mm.set_resolution(w, h);
+        Ok(())
+    });
+    def!("exit", |mm| {
+        mm.exit_requested = true;
+        Err::<(), _>(rt(EXIT_MARKER))
+    });
+    def!("rgb", |_mm, r: f64, gg: f64, b: f64, a: Option<f64>| {
+        let c = |v: f64| v.clamp(0.0, 255.0).round() as u8;
+        Ok(color_num(Color::rgba(c(r), c(gg), c(b), c(a.unwrap_or(255.0)))))
+    });
+    def!("hsv", |_mm, h: f64, s: f64, v: f64, a: Option<f64>| {
+        Ok(color_num(Color::hsv(h as f32, s as f32, v as f32, a.unwrap_or(255.0).clamp(0.0, 255.0).round() as u8)))
+    });
+    def!("color", |mm, c: Option<f64>| {
+        if let Some(c) = c {
+            mm.color = Color::from_u32(c.max(0.0) as u32);
+        }
+        Ok(color_num(mm.color))
+    });
+
+    // ---- Math ----
+    def!("random", |mm, a: Option<f64>, b: Option<f64>| {
+        Ok(match (a, b) {
+            (None, _) => mm.rng.next_f64(),
+            (Some(n), None) => mm.rng.range(1, n.floor() as i64) as f64,
+            (Some(lo), Some(hi)) => mm.rng.range(lo.floor() as i64, hi.floor() as i64) as f64,
+        })
+    });
+    def!("seed", |mm, n: f64| {
+        mm.rng = crate::machine::Pcg32::new(n.to_bits());
+        Ok(())
+    });
+    def!("clamp", |_mm, x: f64, lo: f64, hi: f64| { Ok(x.max(lo).min(hi)) });
+    def!("lerp", |_mm, a: f64, b: f64, t: f64| { Ok(a + (b - a) * t) });
+    def!("round", |_mm, x: f64| { Ok(x.round()) });
+    def!("sign", |_mm, x: f64| { Ok(if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 }) });
+    def!("dist", |_mm, x1: f64, y1: f64, x2: f64, y2: f64| { Ok(((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()) });
+    def!("angle", |_mm, x1: f64, y1: f64, x2: f64, y2: f64| { Ok((y2 - y1).atan2(x2 - x1)) });
+    // math.random/randomseed route through our PRNG for determinism.
+    {
+        let math: Table = g.get("math")?;
+        math.set("random", g.get::<Value>("random")?)?;
+        math.set("randomseed", g.get::<Value>("seed")?)?;
+    }
+
+    // ---- Text ----
+    def!("print", |mm, vals: MultiValue| {
+        let s = values_to_string(&vals)?;
+        mm.grid.println(&s);
+        Ok(())
+    });
+    def!("write", |mm, vals: MultiValue| {
+        let s = values_to_string(&vals)?;
+        mm.grid.write(&s);
+        Ok(())
+    });
+    def!("locate", |mm, c: f64, r: f64| {
+        mm.grid.locate(px(c).max(0) as usize, px(r).max(0) as usize);
+        Ok(())
+    });
+    def!("text_color", |mm, fg: f64, bg: Option<f64>| {
+        mm.grid.fg = Color::from_u32(fg.max(0.0) as u32);
+        mm.grid.bg = bg.map(|b| Color::from_u32(b.max(0.0) as u32));
+        Ok(())
+    });
+    def!("put_char", |mm, c: f64, r: f64, ch: String, fg: Option<f64>, bg: Option<f64>| {
+        let ch = ch.chars().next().unwrap_or(' ');
+        let fg = fg.map(|v| Color::from_u32(v.max(0.0) as u32)).unwrap_or(mm.grid.fg);
+        let bg = match bg { Some(v) => Some(Color::from_u32(v.max(0.0) as u32)), None => mm.grid.bg };
+        mm.grid.put_char_colored(px(c).max(0) as usize, px(r).max(0) as usize, ch, fg, bg);
+        Ok(())
+    });
+    def!("get_char", |mm, c: f64, r: f64| {
+        match mm.grid.get(px(c).max(0) as usize, px(r).max(0) as usize) {
+            Some(cell) => Ok((Some(cell.ch.to_string()), Some(color_num(cell.fg)), cell.bg.map(color_num))),
+            None => Ok((None, None, None)),
+        }
+    });
+    def!("text_size", |mm| { Ok((mm.grid.cols(), mm.grid.rows())) });
+    def!("cursor", |mm, v: bool| {
+        mm.grid.cursor_visible = v;
+        Ok(())
+    });
+    def!("clear_text", |mm| {
+        let (fg, bg) = (mm.grid.fg, mm.grid.bg);
+        mm.grid.clear_with(fg, bg);
+        Ok(())
+    });
+
+    // ---- Input ----
+    def!("input", |mm, prompt: Option<String>| {
+        if let Some(p) = &prompt {
+            mm.grid.write(p);
+        }
+        let was_visible = mm.grid.cursor_visible;
+        mm.grid.cursor_visible = true;
+        let mut buf = String::new();
+        let result = loop {
+            if mm.immediate {
+                break Err(rt("input() needs a running program. Save this as a program and use RUN."));
+            }
+            if let Err(e) = flip_result(mm.do_flip()) {
+                break Err(e);
+            }
+            let mut done = false;
+            while let Some(ev) = mm.key_queue.pop_front() {
+                match ev.code {
+                    KeyCode::Enter | KeyCode::NumpadEnter => {
+                        done = true;
+                        break;
+                    }
+                    KeyCode::Backspace => {
+                        if buf.pop().is_some() {
+                            if mm.grid.cursor_col > 0 {
+                                mm.grid.cursor_col -= 1;
+                            } else if mm.grid.cursor_row > 0 {
+                                mm.grid.cursor_row -= 1;
+                                mm.grid.cursor_col = mm.grid.cols() - 1;
+                            }
+                            let (c, r) = (mm.grid.cursor_col, mm.grid.cursor_row);
+                            mm.grid.put_char(c, r, ' ');
+                        }
+                    }
+                    _ => {
+                        if let Some(ch) = ev.text {
+                            if !ch.is_control() && !ev.mods.ctrl {
+                                buf.push(ch);
+                                mm.grid.write(&ch.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            if done {
+                mm.grid.newline();
+                break Ok(buf.clone());
+            }
+        };
+        mm.grid.cursor_visible = was_visible;
+        result
+    });
+    def!("wait_key", |mm| {
+        loop {
+            if let Some(ev) = mm.key_queue.pop_front() {
+                return Ok(ev.read_key_name());
+            }
+            if mm.immediate {
+                return Err(rt("wait_key() needs a running program. Save this as a program and use RUN."));
+            }
+            flip_result(mm.do_flip())?;
+        }
+    });
+    def!("read_key", |mm| { Ok(mm.key_queue.pop_front().map(|ev| ev.read_key_name())) });
+    def!("button", |mm, name: String, _player: Option<f64>| {
+        let b = PadButton::from_name(&name).ok_or_else(|| rt(format!("unknown button '{name}'; use up down left right a b x y l r start select")))?;
+        Ok(mm.input.buttons.contains(&b))
+    });
+    def!("button_pressed", |mm, name: String, _player: Option<f64>| {
+        let b = PadButton::from_name(&name).ok_or_else(|| rt(format!("unknown button '{name}'")))?;
+        Ok(mm.input.buttons_pressed.contains(&b))
+    });
+    def!("button_released", |mm, name: String, _player: Option<f64>| {
+        let b = PadButton::from_name(&name).ok_or_else(|| rt(format!("unknown button '{name}'")))?;
+        Ok(mm.input.buttons_released.contains(&b))
+    });
+    def!("key", |mm, name: String| {
+        let k = KeyCode::from_name(&name).ok_or_else(|| rt(format!("unknown key '{name}'")))?;
+        Ok(mm.input.down.contains(&k))
+    });
+    def!("key_pressed", |mm, name: String| {
+        let k = KeyCode::from_name(&name).ok_or_else(|| rt(format!("unknown key '{name}'")))?;
+        Ok(mm.input.pressed.contains(&k))
+    });
+    def!("key_released", |mm, name: String| {
+        let k = KeyCode::from_name(&name).ok_or_else(|| rt(format!("unknown key '{name}'")))?;
+        Ok(mm.input.released.contains(&k))
+    });
+
+    // ---- Draw ----
+    def!("pixel", |mm, x: f64, y: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Pixel { x: px(x), y: px(y), color });
+        Ok(())
+    });
+    def!("line", |mm, x1: f64, y1: f64, x2: f64, y2: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Line { x1: px(x1), y1: px(y1), x2: px(x2), y2: px(y2), color });
+        Ok(())
+    });
+    def!("line_width", |mm, w: f64| {
+        mm.cmds.push(DrawCmd::SetLineWidth(w.clamp(1.0, 256.0) as u32));
+        Ok(())
+    });
+    def!("rect", |mm, x: f64, y: f64, w: f64, h: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Rect { x: px(x), y: px(y), w: px(w), h: px(h), color, fill: false });
+        Ok(())
+    });
+    def!("fill_rect", |mm, x: f64, y: f64, w: f64, h: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Rect { x: px(x), y: px(y), w: px(w), h: px(h), color, fill: true });
+        Ok(())
+    });
+    def!("draw_text", |mm, x: f64, y: f64, text: MultiValue| {
+        // text may be followed by color and scale
+        let mut it = text.into_iter();
+        let s = match it.next() {
+            Some(Value::String(s)) => s.to_str()?.to_string(),
+            Some(Value::Nil) | None => String::new(),
+            Some(v) => match v {
+                Value::Integer(i) => i.to_string(),
+                Value::Number(n) => fmt_number(n),
+                Value::Boolean(b) => b.to_string(),
+                other => other.to_string()?,
+            },
+        };
+        let c = match it.next() { Some(Value::Number(n)) => Some(n), Some(Value::Integer(i)) => Some(i as f64), _ => None };
+        let scale = match it.next() { Some(Value::Number(n)) => n.max(1.0) as u32, Some(Value::Integer(i)) => i.max(1) as u32, _ => 1 };
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Text { x: px(x), y: px(y), text: s, color, scale });
+        Ok(())
+    });
+
+    // ---- File ----
+    def!("save", lua |lua, mm, key: String, value: Value| {
+        let json: serde_json::Value = lua.from_value(value)?;
+        let mut store = read_store(&mm);
+        store.insert(key, json);
+        write_store(&mm, &store)
+    });
+    def!("load", lua |lua, mm, key: String, default: Value| {
+        let store = read_store(&mm);
+        match store.get(&key) {
+            Some(v) => lua.to_value(v),
+            None => Ok(default),
+        }
+    });
+    {
+        // require: load `name.lua` from the program folder once.
+        let m2: M = m.clone();
+        names.push("require");
+        let cache = lua.create_table()?;
+        let cache_key = lua.create_registry_value(cache)?;
+        g.set("require", lua.create_function(move |lua, name: String| {
+            let cache: Table = lua.registry_value(&cache_key)?;
+            if let Some(v) = cache.get::<Option<Value>>(name.as_str())? {
+                return Ok(v);
+            }
+            let clean = name.trim().trim_end_matches(".lua").replace('.', "/");
+            let candidates = [format!("{clean}.lua"), format!("{clean}/init.lua")];
+            let (path, src) = {
+                let mm = m2.borrow();
+                let mut found = None;
+                for c in &candidates {
+                    if let Ok(s) = mm.jail.read_string(c) {
+                        found = Some((c.clone(), s));
+                        break;
+                    }
+                }
+                found.ok_or_else(|| rt(format!("require: module '{name}' not found (looked for {})", candidates.join(", "))))?
+            };
+            let chunk_name = format!("={}", path);
+            let v: Value = lua.load(&src).set_name(&chunk_name).call(())?;
+            let v = if v == Value::Nil { Value::Boolean(true) } else { v };
+            cache.set(name.as_str(), v.clone())?;
+            Ok(v)
+        })?)?;
+    }
+
+    Ok(names)
+}
+
+fn store_path(m: &Machine) -> String {
+    let name = m.main_name.trim_end_matches(".lua").replace('/', "_");
+    format!("{name}.json")
+}
+
+fn read_store(m: &Machine) -> serde_json::Map<String, serde_json::Value> {
+    let Some(j) = &m.save_jail else { return Default::default() };
+    j.read_string(&store_path(m))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn write_store(m: &Machine, store: &serde_json::Map<String, serde_json::Value>) -> mlua::Result<()> {
+    let Some(j) = &m.save_jail else { return Err(rt("save: no save folder available")) };
+    let s = serde_json::to_string_pretty(&serde_json::Value::Object(store.clone())).map_err(|e| rt(e.to_string()))?;
+    j.write(&store_path(m), s.as_bytes()).map_err(|e| rt(format!("save: {e}")))
+}
+
+/// Cell size exposed for `draw_text` layout math.
+pub const FONT_CELL: (u32, u32) = (CELL_W, CELL_H);
