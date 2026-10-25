@@ -84,6 +84,8 @@ pub struct Console {
     /// Set when the renderer must reset per-program GPU state.
     pub program_started: bool,
     program: Option<Running>,
+    /// Fixed frame time handed to programs (headless/CI); None = measured.
+    pub fixed_dt: Option<f64>,
 
     disk: Jail,
     api: ApiTable,
@@ -129,6 +131,7 @@ impl Console {
             imm,
             program_started: false,
             program: None,
+            fixed_dt: None,
             disk,
             api: argon_lua::docs::api_table(),
             audio: if audio { AudioEngine::new() } else { AudioEngine::disabled() },
@@ -145,6 +148,15 @@ impl Console {
 
     pub fn theme(&self) -> &'static Theme {
         self.theme
+    }
+
+    /// PRNG seed for a new program: fixed under a fixed frame step (headless
+    /// runs stay reproducible), otherwise from the clock. `seed(n)` overrides.
+    fn program_seed(&self) -> u64 {
+        if self.fixed_dt.is_some() {
+            return 0x5eed;
+        }
+        clock_seed()
     }
 
     pub fn is_running(&self) -> bool {
@@ -575,7 +587,7 @@ impl Console {
             source,
             jail,
             save_jail,
-            options: MachineOptions { width: w, height: h, fps: manifest.fps.clamp(1, 240), main_name, seed: 0x5eed, immediate: false },
+            options: MachineOptions { width: w, height: h, fps: manifest.fps.clamp(1, 240), main_name, seed: self.program_seed(), immediate: false },
         };
         let handle = spawn_program(spec);
         let resolution_changed = (w, h) != self.resolution;
@@ -928,7 +940,7 @@ impl Console {
                 let fps = r.handle.pending_fps().unwrap_or(r.fps).max(1);
                 let interval = Duration::from_secs_f64(1.0 / fps as f64);
                 let elapsed = r.handle.since_last_ack();
-                if elapsed + Duration::from_millis(2) >= interval {
+                if self.fixed_dt.is_some() || elapsed + Duration::from_millis(2) >= interval {
                     let frame = r.handle.poll_frame().unwrap().clone();
                     if let Some((w, h)) = frame.resolution {
                         if (w, h) != self.resolution {
@@ -942,7 +954,7 @@ impl Console {
                     cmds.extend(frame.cmds);
                     r.grid = frame.grid;
                     let snap = self.input.snapshot(&keymap);
-                    r.handle.ack(snap);
+                    r.handle.ack(snap, self.fixed_dt);
                 }
             }
             if let Some(e) = r.handle.poll_exit() {
@@ -1034,9 +1046,15 @@ impl Console {
     }
 }
 
+fn clock_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0x5eed, |d| d.as_nanos() as u64)
+}
+
 fn new_immediate(disk: &Jail) -> Result<Runtime, String> {
     let save = disk.sub("SAVE").ok();
-    let opts = MachineOptions { immediate: true, main_name: "shell".to_string(), ..Default::default() };
+    let opts = MachineOptions { immediate: true, main_name: "shell".to_string(), seed: clock_seed(), ..Default::default() };
     Runtime::new(opts, disk.clone(), save, Arc::new(AtomicBool::new(false)), Box::new(NoFlip)).map_err(|e| e.to_string())
 }
 

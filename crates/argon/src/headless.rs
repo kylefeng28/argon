@@ -14,6 +14,8 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
     let (w, h) = (argon_core::DEFAULT_WIDTH, argon_core::DEFAULT_HEIGHT);
     let mut renderer = Renderer::new(gpu, w, h);
 
+    // Set fixed frame time for reproducibility (this also sets PRNG to a fixed seed)
+    console.fixed_dt = Some(1.0 / 60.0);
     if let Some(p) = program {
         console.execute_line(&format!("RUN {p}"));
     }

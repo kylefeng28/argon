@@ -135,11 +135,12 @@ impl ProgramHandle {
         self.pending.as_ref().map(|f| f.fps)
     }
 
-    /// Acknowledge the pending frame, letting the program continue.
-    pub fn ack(&mut self, input: argon_core::InputSnapshot) {
+    /// Acknowledge the pending frame, letting the program continue. `dt`
+    /// overrides the measured frame time (headless runs use a fixed step).
+    pub fn ack(&mut self, input: argon_core::InputSnapshot, fixed_dt: Option<f64>) {
         if self.pending.take().is_some() {
             let now = Instant::now();
-            let dt = now.duration_since(self.last_ack).as_secs_f64();
+            let dt = fixed_dt.unwrap_or_else(|| now.duration_since(self.last_ack).as_secs_f64().min(0.25));
             self.last_ack = now;
             self.frame_no += 1;
             let _ = self.acks.send(FrameAck { input, dt: dt.min(0.25), frame: self.frame_no });
