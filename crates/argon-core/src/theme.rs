@@ -17,6 +17,18 @@ pub struct Theme {
     pub menu_fg: Color,
     pub menu_hl_bg: Color,
     pub menu_hl_fg: Color,
+    // Syntax highlighting
+    pub syn_keyword: Color,
+    pub syn_string: Color,
+    pub syn_number: Color,
+    pub syn_comment: Color,
+    pub syn_builtin: Color,
+}
+
+impl Theme {
+    pub fn default_theme() -> &'static Theme {
+        &DEFAULT_THEME
+    }
 }
 
 pub const DEFAULT_THEME: Theme = Theme {
@@ -33,4 +45,9 @@ pub const DEFAULT_THEME: Theme = Theme {
     menu_fg: Color::rgb(255, 210, 120),
     menu_hl_bg: Color::rgb(255, 176, 0),
     menu_hl_fg: Color::rgb(16, 10, 2),
+    syn_keyword: Color::rgb(255, 230, 150),
+    syn_string: Color::rgb(255, 150, 80),
+    syn_number: Color::rgb(255, 220, 190),
+    syn_comment: Color::rgb(150, 100, 20),
+    syn_builtin: Color::rgb(255, 200, 100),
 };

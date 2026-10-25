@@ -1,14 +1,14 @@
 //! The console state machine: Shell <-> Editor <-> Running.
 
-use crate::lineedit::{LineAction, LineEdit};
+use crate::editor::{Editor, EditorAction};
 use crate::help;
+use crate::lineedit::{LineAction, LineEdit};
 use crate::shell::{self, ShellCmd};
 use argon_core::api::ApiTable;
 use argon_core::config::{Config, Manifest, Paths};
 use argon_core::draw::DrawCmd;
 use argon_core::input::{InputState, KeyCode, KeyEvent};
 use argon_core::vfs::{self, Jail, ProgramLocation};
-use argon_core::theme::DEFAULT_THEME;
 use argon_core::{Color, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use argon_lua::machine::{MachineOptions, NoFlip};
 use argon_lua::program::{spawn_program, ProgramExit, ProgramHandle, ProgramSpec};
@@ -27,13 +27,13 @@ pub struct ConsoleOptions {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
     Shell,
-    // Editor,
+    Editor,
     Running,
 }
 
 struct Running {
     handle: ProgramHandle,
-    // from_editor: bool,
+    from_editor: bool,
     location: ProgramLocation,
     /// Text layer of the last presented frame.
     grid: TextGrid,
@@ -62,6 +62,7 @@ pub struct Console {
     cmds: Vec<DrawCmd>,
     mode: Mode,
     le: LineEdit,
+    editor: Option<Editor>,
     resolution: (u32, u32),
     time: f64,
     quit: bool,
@@ -93,7 +94,7 @@ impl Console {
         let disk = Jail::new(paths.disk.clone()).with_read_only(&["DEMOS"]);
         let imm = new_immediate(&disk)?;
 
-        let theme = &DEFAULT_THEME;
+        let theme = Theme::default_theme();
         let history = std::fs::read_to_string(&paths.history)
             .map(|s| s.lines().map(|l| l.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
@@ -109,6 +110,7 @@ impl Console {
             cmds: vec![DrawCmd::Clear(theme.bg)],
             mode: Mode::Shell,
             le: LineEdit::with_history(history),
+            editor: None,
             resolution: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
             time: 0.0,
             quit: false,
@@ -203,6 +205,17 @@ impl Console {
                         r.handle.request_break();
                     }
                 }
+            }
+            Mode::Editor => {
+                if !ev.pressed {
+                    return;
+                }
+                let rows = self.grid.rows();
+                let action = match self.editor.as_mut() {
+                    Some(ed) => ed.handle(&ev, &self.api, rows),
+                    None => EditorAction::None,
+                };
+                self.editor_action(action);
             }
         }
     }
@@ -345,6 +358,9 @@ impl Console {
                 }
             }
 
+            ShellCmd::New(name) => self.cmd_new(name),
+            ShellCmd::Edit(name) => self.cmd_edit(name),
+
             ShellCmd::Mkdir(dir) => self.cmd_mkdir(dir),
             ShellCmd::Copy(a, b) => self.cmd_copy(a, b),
             ShellCmd::Ren(a, b) => self.cmd_ren(a, b),
@@ -478,10 +494,10 @@ impl Console {
             self.print_error(&format!("Program not found: {name}"));
             return;
         };
-        self.start_program(loc);
+        self.start_program(loc, false);
     }
 
-    fn start_program(&mut self, loc: ProgramLocation) {
+    fn start_program(&mut self, loc: ProgramLocation, from_editor: bool) {
         let source = match self.disk.read_string(&loc.main) {
             Ok(s) => s,
             Err(e) => {
@@ -518,7 +534,7 @@ impl Console {
         let mut grid = TextGrid::for_pixels(w, h);
         grid.cursor_visible = false;
         self.input.clear_all();
-        self.program = Some(Running { handle, location: loc, grid, resolution_changed, fps: manifest.fps.max(1) });
+        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1) });
         self.mode = Mode::Running;
         self.program_started = true;
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
@@ -587,6 +603,143 @@ impl Console {
         }
     }
 
+    // ----- editor commands -------------------------------------------------------------------
+    fn cmd_new(&mut self, name: Option<String>) {
+        let Some(name) = name else {
+            self.print_error("NEW what? Usage: NEW name");
+            return;
+        };
+        if self.resolve(&name).is_some() {
+            self.print_error(&format!("{name} already exists. Use EDIT {name}."));
+            return;
+        }
+        self.cmd_edit(Some(name));
+    }
+
+    fn cmd_edit(&mut self, name: Option<String>) {
+        let name = match name {
+            Some(n) => n,
+            None => {
+                self.print_error("EDIT what? Usage: EDIT name");
+                return;
+            }
+        };
+        match self.resolve(&name) {
+            Some(loc) => self.open_editor(loc),
+            None => {
+                // Create a new single-file program.
+                let clean = name.trim().trim_end_matches(".lua").to_string();
+                if clean.is_empty() || clean.contains(['/', '\\']) && !self.disk.is_dir(&vfs::join(&self.cwd, &vfs::parent(&clean))) {
+                    self.print_error(&format!("Cannot create {name}"));
+                    return;
+                }
+                let path = vfs::join(&self.cwd, &format!("{clean}.lua"));
+                let template = shell::new_program_template(vfs::file_name(&clean));
+                if let Err(e) = self.disk.write(&path, template.as_bytes()) {
+                    self.print_error(&e.to_string());
+                    return;
+                }
+                if let Some(loc) = self.resolve(&clean) {
+                    self.open_editor(loc);
+                }
+            }
+        }
+    }
+
+    fn open_editor(&mut self, loc: ProgramLocation) {
+        match self.disk.read_string(&loc.main) {
+            Ok(text) => {
+                let name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { format!("{}.lua", loc.name) };
+                let mut ed = Editor::new(&loc.main, &name, &text, self.config.editor.tab_size);
+                if self.disk.resolve(&loc.main).map(|_| loc.main.to_ascii_uppercase().starts_with("DEMOS/")).unwrap_or(false) {
+                    ed.set_status("DEMOS are read-only: COPY it to your own folder to edit", false);
+                }
+                self.editor = Some(ed);
+                self.mode = Mode::Editor;
+            }
+            Err(e) => self.print_error(&e.to_string()),
+        }
+    }
+
+    fn editor_action(&mut self, action: EditorAction) {
+        match action {
+            EditorAction::None => {}
+            EditorAction::Save => {
+                if let Err(e) = self.save_editor() {
+                    if let Some(ed) = &mut self.editor {
+                        ed.set_status(&e, true);
+                    }
+                } else if let Some(ed) = &mut self.editor {
+                    ed.set_status("Saved", false);
+                }
+            }
+            EditorAction::Run => {
+                if let Err(e) = self.save_editor() {
+                    if let Some(ed) = &mut self.editor {
+                        ed.set_status(&e, true);
+                    }
+                    return;
+                }
+                let Some(ed) = &self.editor else { return };
+                let path = ed.path.clone();
+                let name = vfs::strip_lua_ext(vfs::file_name(&path)).to_string();
+                let loc = if path.ends_with("/main.lua") {
+                    let dir = vfs::parent(&path);
+                    ProgramLocation { main: path.clone(), dir: dir.clone(), manifest: Some(vfs::join(&dir, "cart.toml")).filter(|m| self.disk.exists(m)), is_cart: true, name: vfs::file_name(&dir).to_string() }
+                } else {
+                    ProgramLocation { main: path.clone(), dir: vfs::parent(&path), manifest: None, is_cart: false, name }
+                };
+                self.start_program(loc, true);
+            }
+            EditorAction::SaveAndExit => {
+                match self.save_editor() {
+                    Ok(()) => self.leave_editor(),
+                    Err(e) => {
+                        if let Some(ed) = &mut self.editor {
+                            ed.set_status(&e, true);
+                        }
+                    }
+                }
+            }
+            EditorAction::Exit => self.leave_editor(),
+        }
+    }
+
+    fn save_editor(&mut self) -> Result<(), String> {
+        let Some(ed) = &mut self.editor else { return Ok(()) };
+        if !ed.modified {
+            return Ok(());
+        }
+        let text = ed.text();
+        match self.disk.write(&ed.path, text.as_bytes()) {
+            Ok(()) => {
+                ed.mark_saved();
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn leave_editor(&mut self) {
+        self.editor = None;
+        self.mode = Mode::Shell;
+        self.restore_shell_grid();
+        self.input.clear_all();
+    }
+
+    /// Back in the shell after the editor: redraw a clean shell screen.
+    fn restore_shell_grid(&mut self) {
+        if self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        }
+        self.grid = TextGrid::for_pixels(self.resolution.0, self.resolution.1);
+        self.grid.fg = self.theme.fg;
+        self.grid.bg = None;
+        self.grid.cursor_visible = true;
+        self.prompt_row = 0;
+        self.cmds.push(DrawCmd::Clear(self.theme.bg));
+    }
+
     // ----- frame -----------------------------------------------------------------------------
 
     /// Advance one display frame. `dt` is the display frame time.
@@ -599,28 +752,25 @@ impl Console {
             self.poll_program(&mut cmds);
         }
 
+        // TODO combine with if statement?
         match self.mode {
-            Mode::Shell => {
-                self.draw_prompt();
-                FrameOutput {
-                    cmds, grid: self.grid.clone(),
-                    cursor_on,
-                    resolution: self.resolution,
-                    clear_color: self.theme.bg,
-                    running: false,
-                }
-            }
-
             Mode::Running => {
                 let r = self.program.as_ref().expect("running without program");
-                FrameOutput {
-                    cmds,
-                    grid: r.grid.clone(),
-                    cursor_on,
-                    resolution: self.resolution,
-                    clear_color: Color::BLACK,
-                    running: true,
+                FrameOutput { cmds, grid: r.grid.clone(), cursor_on, resolution: self.resolution, clear_color: Color::BLACK, running: true }
+            }
+
+            Mode::Shell => {
+                self.draw_prompt();
+                FrameOutput { cmds, grid: self.grid.clone(), cursor_on, resolution: self.resolution, clear_color: self.theme.bg, running: false }
+            }
+
+            Mode::Editor => {
+                let theme = self.theme;
+                let api = &self.api;
+                if let Some(ed) = &mut self.editor {
+                    ed.draw(&mut self.grid, theme, api);
                 }
+                FrameOutput { cmds, grid: self.grid.clone(), cursor_on, resolution: self.resolution, clear_color: theme.bg, running: false }
             }
         }
     }
@@ -699,7 +849,7 @@ impl Console {
 
     fn finish_program(&mut self, exit: ProgramExit, cmds: &mut Vec<DrawCmd>) {
         let Some(mut r) = self.program.take() else { return };
-        // let from_editor = r.from_editor;
+        let from_editor = r.from_editor;
         let (final_exit, final_frame) = r.handle.finish(Duration::from_millis(500));
         let exit = if matches!(exit, ProgramExit::Finished) { final_exit } else { exit };
         self.input.clear_all();
@@ -714,7 +864,6 @@ impl Console {
             r.grid = f.grid;
         }
 
-        /*
         if from_editor {
             self.mode = Mode::Editor;
             self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
@@ -736,7 +885,6 @@ impl Console {
             }
             return;
         }
-        */
 
         self.mode = Mode::Shell;
         if r.resolution_changed || self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {

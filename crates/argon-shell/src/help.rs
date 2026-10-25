@@ -21,6 +21,9 @@ pub static COMMANDS: &[CommandDoc] = &[
     CommandDoc { name: "RUN", usage: "RUN [name]", doc: "Run a program. With no name, re-runs the last one. Esc stops it." },
     CommandDoc { name: "LUA", usage: "LUA [name]", doc: "Evaluate a lua expression or command. Alias: EVAL." },
 
+    CommandDoc { name: "NEW", usage: "NEW name", doc: "Create a new program from a template and open it in the editor." },
+    CommandDoc { name: "EDIT", usage: "EDIT [name]", doc: "Open a program in the editor (creates it if missing)." },
+
     CommandDoc { name: "MKDIR", usage: "MKDIR name", doc: "Create a folder." },
     CommandDoc { name: "COPY", usage: "COPY from to", doc: "Copy a file or folder. Alias: CP" },
     CommandDoc { name: "REN", usage: "REN from to", doc: "Rename a file or folder. Alias: MV" },

@@ -14,6 +14,7 @@ pub struct Config {
     /// Override of the disk location.
     pub disk: Option<PathBuf>,
     pub keymap: KeyMap,
+    pub editor: EditorConfig,
 }
 
 impl Default for Config {
@@ -23,6 +24,7 @@ impl Default for Config {
             // fullscreen: false,
             disk: None,
             keymap: KeyMap::default(),
+            editor: EditorConfig::default(),
         }
     }
 }
@@ -44,6 +46,19 @@ impl Config {
         }
         let s = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, s)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorConfig {
+    pub tab_size: usize,
+    pub show_line_numbers: bool,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        EditorConfig { tab_size: 2, show_line_numbers: true }
     }
 }
 

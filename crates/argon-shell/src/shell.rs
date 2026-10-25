@@ -20,6 +20,9 @@ pub enum ShellCmd {
     Run(Option<String>),
     Lua(Option<String>),
 
+    New(Option<String>),
+    Edit(Option<String>),
+
     Mkdir(Option<String>),
     Copy(Option<String>, Option<String>),
     Ren(Option<String>, Option<String>),
@@ -60,6 +63,9 @@ pub fn parse(line: &str) -> ShellCmd {
         "TYPE" | "CAT" => ShellCmd::Type(one()),
         "RUN" => ShellCmd::Run(one()),
         "LUA" | "EVAL" => ShellCmd::Lua(one()),
+
+        "NEW" => ShellCmd::New(one()),
+        "EDIT" => ShellCmd::Edit(one()),
 
         "MKDIR" => ShellCmd::Mkdir(one()),
         "COPY" | "CP" => {
@@ -139,6 +145,12 @@ pub fn human_size(b: u64) -> String {
     }
 }
 
+/// Template for `NEW name`.
+pub fn new_program_template(name: &str) -> String {
+    format!(
+        "-- {name}\n-- Press F5 to run, Esc to stop, F1 for the catalog.\n\ncls()\nprint(\"Hello from {name}!\")\n\nwhile true do\n  fill_circle(320 + 100 * math.sin(time()), 200, 40, rgb(255, 200, 0))\n  flip()\nend\n"
+    )
+}
 
 #[cfg(test)]
 mod tests {
