@@ -4,7 +4,7 @@ alt_screen()
 local w, h = screen_size()
 local x, y = w / 2, h / 2
 local dx, dy = 3, 2
-local r = 16
+local r = h // 25
 local trail = {}
 
 while true do
@@ -30,6 +30,6 @@ while true do
   fill_circle(x, y, r, rgb(255, 230, 120))
 
   draw_text(8, 8, "ARROWS steer   Z speeds up   ESC quits", rgb(160, 160, 200))
-  draw_text(8, h - 24, string.format("%.0f fps", 1 / math.max(delta_time(), 0.0001)), rgb(120, 120, 160))
+  draw_text(8, h - 16 * (h // 400) - 8, string.format("%.0f fps", 1 / math.max(delta_time(), 0.0001)), rgb(120, 120, 160))
   flip()
 end

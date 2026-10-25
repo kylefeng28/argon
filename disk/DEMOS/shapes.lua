@@ -1,4 +1,5 @@
 -- shapes: every Tier 1 primitive, once, so you can see what they look like.
+-- argon: resolution = "classic"
 alt_screen()
 cls(rgb(20, 24, 40))
 local white = rgb(255, 255, 255)

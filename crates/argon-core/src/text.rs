@@ -25,6 +25,8 @@ impl Cell {
 pub struct TextGrid {
     cols: usize,
     rows: usize,
+    /// Cell size multiplier over the 8x16 base (see `text_scale_for_height`).
+    cell_scale: u32,
     cells: Vec<Cell>,
     pub cursor_col: usize,
     pub cursor_row: usize,
@@ -40,6 +42,7 @@ impl TextGrid {
         TextGrid {
             cols,
             rows,
+            cell_scale: 1,
             cells: vec![Cell::blank(); cols * rows],
             cursor_col: 0,
             cursor_row: 0,
@@ -50,12 +53,25 @@ impl TextGrid {
         }
     }
 
-    /// Grid that covers a pixel area of the given size.
+    /// Grid that covers a pixel area of the given size, with cells scaled so
+    /// the grid stays near 80x25 at any resolution.
     pub fn for_pixels(width: u32, height: u32) -> TextGrid {
-        TextGrid::new(
-            (width / crate::CELL_W).max(1) as usize,
-            (height / crate::CELL_H).max(1) as usize,
-        )
+        let s = crate::text_scale_for_height(height);
+        let mut g = TextGrid::new(
+            (width / (crate::CELL_W * s)).max(1) as usize,
+            (height / (crate::CELL_H * s)).max(1) as usize,
+        );
+        g.cell_scale = s;
+        g
+    }
+
+    pub fn cell_scale(&self) -> u32 {
+        self.cell_scale
+    }
+
+    /// Cell size in pixels.
+    pub fn cell_size(&self) -> (u32, u32) {
+        (crate::CELL_W * self.cell_scale, crate::CELL_H * self.cell_scale)
     }
 
     pub fn cols(&self) -> usize {
@@ -222,8 +238,22 @@ mod tests {
     }
 
     #[test]
-    fn for_pixels_matches_default_resolution() {
-        let g = TextGrid::for_pixels(640, 400);
-        assert_eq!((g.cols(), g.rows()), (80, 25));
+    fn clone_and_clear_keep_cell_scale() {
+        let mut g = TextGrid::for_pixels(1280, 800);
+        g.clear();
+        assert_eq!(g.cell_scale(), 2);
+        assert_eq!(g.clone().cell_size(), (16, 32));
+    }
+
+    #[test]
+    fn for_pixels_keeps_80x25_at_every_16_10_preset() {
+        for (w, h, s) in [(640, 400, 1), (1280, 800, 2), (1920, 1200, 3), (2560, 1600, 4)] {
+            let g = TextGrid::for_pixels(w, h);
+            assert_eq!((g.cols(), g.rows(), g.cell_scale()), (80, 25, s), "{w}x{h}");
+        }
+        let g = TextGrid::for_pixels(1920, 1080);
+        assert_eq!((g.cols(), g.rows()), (80, 22));
+        let g = TextGrid::for_pixels(320, 240);
+        assert_eq!((g.cols(), g.rows(), g.cell_scale()), (40, 15, 1));
     }
 }

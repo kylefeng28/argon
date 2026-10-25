@@ -1,5 +1,5 @@
 -- retro: a low resolution cart with a scrolling camera.
--- argon: resolution = "retro"
+-- argon: resolution = "retro"   (320x240: chunky pixels on purpose)
 alt_screen()
 local w, h = screen_size()
 local tiles = {}

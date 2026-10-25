@@ -19,7 +19,7 @@ local faces = {
 }
 
 -- A procedural texture: a tile with a border and a diagonal.
-local tex = new_image(64, 64)
+local tex = new_image(64, 64)  -- texture resolution is independent of the screen
 set_target(tex)
 cls(rgb(210, 190, 150))
 for i = 0, 7 do
@@ -138,6 +138,6 @@ while true do
   end
 
   draw_text(8, 8, "CUBE  " .. modes[mode] .. (wire_overlay and " + wire" or ""), rgb(255, 255, 255), 2)
-  draw_text(8, h - 20, "Z material   X wire overlay   ARROWS spin   ENTER auto-rotate", rgb(140, 140, 180))
+  draw_text(8, h - 16 * (h // 400) - 4, "Z material   X wire overlay   ARROWS spin   ENTER auto-rotate", rgb(140, 140, 180))
   flip()
 end

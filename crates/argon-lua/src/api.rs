@@ -416,7 +416,8 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
             (Value::String(s), None) => {
                 let name = s.to_str()?.to_string();
                 argon_core::resolution_preset(&name)
-                    .ok_or_else(|| rt(format!("unknown resolution '{name}'; use tiny, retro, classic, hd or WxH")))?
+                    .ok_or_else(|| rt(format!("unknown resolution '{name}'; use tiny, retro, classic, hd, uhd, native or WxH")))?
+                    .resolve(mm.window)
             }
             (Value::Number(w), Some(h)) => (*w as u32, h as u32),
             (Value::Integer(w), Some(h)) => (*w as u32, h as u32),
@@ -710,7 +711,9 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
             },
         };
         let c = match it.next() { Some(Value::Number(n)) => Some(n), Some(Value::Integer(i)) => Some(i as f64), _ => None };
-        let scale = match it.next() { Some(Value::Number(n)) => n.max(1.0) as u32, Some(Value::Integer(i)) => i.max(1) as u32, _ => 1 };
+        // Default text size follows the screen's text scale, so pixel text is
+        // the same size as the text grid at every resolution.
+        let scale = match it.next() { Some(Value::Number(n)) => n.max(1.0) as u32, Some(Value::Integer(i)) => i.max(1) as u32, _ => mm.text_scale() };
         let color = col(&mm, c);
         mm.cmds.push(DrawCmd::Text { x: px(x), y: px(y), text: s, color, scale });
         Ok(())

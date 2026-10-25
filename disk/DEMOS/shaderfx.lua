@@ -62,7 +62,8 @@ while true do
   else
     draw_image(scene, 0, 0)
   end
-  fill_rect(0, h - 18, w, 18, rgb(0, 0, 0, 160))
-  draw_text(4, h - 16, string.format("effect: %s   Z next   X sprite tint shader %s", e.name, use_tint and "ON" or "off"), rgb(150, 220, 255))
+  local th = 16 * (h // 400) + 4
+  fill_rect(0, h - th, w, th, rgb(0, 0, 0, 160))
+  draw_text(4, h - th + 2, string.format("effect: %s   Z next   X sprite tint shader %s", e.name, use_tint and "ON" or "off"), rgb(150, 220, 255))
   flip()
 end

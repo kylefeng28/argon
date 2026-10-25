@@ -443,12 +443,11 @@ impl Renderer {
     /// Set the integer factor between the framebuffer and the window. The
     /// text layer is rasterized at this scale so glyphs stay sharp.
     pub fn set_display_scale(&mut self, scale: u32) {
-        let scale = scale.clamp(1, 8);
+        let scale = scale.clamp(1, 8).min(self.max_display_scale());
         if scale == self.display_scale {
             return;
         }
         self.display_scale = scale;
-        self.rebuild_ui_atlas();
         self.rebuild_composite();
     }
 
@@ -461,18 +460,47 @@ impl Renderer {
             return;
         }
         self.font_mode = mode;
-        self.atlas = Atlas::new(self.fonts.clone(), mode, 1);
-        self.atlas_tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, self.atlas.width, self.atlas.height, Some("atlas"));
+        self.ensure_fb_atlas();
         self.rebuild_ui_atlas();
     }
 
     fn rebuild_ui_atlas(&mut self) {
-        self.ui_atlas = Atlas::new(self.fonts.clone(), self.font_mode, self.display_scale);
+        self.ensure_ui_atlas(self.ui_atlas.scale.max(1), true);
+    }
+
+    /// Make sure the text-layer atlas is rasterized at `scale` (cell scale
+    /// times display scale).
+    fn ensure_ui_atlas(&mut self, scale: u32, force: bool) {
+        if !force && self.ui_atlas.scale == scale && self.ui_atlas.mode() == self.font_mode {
+            return;
+        }
+        self.ui_atlas = Atlas::new(self.fonts.clone(), self.font_mode, scale);
         self.ui_atlas_tex =
             create_texture(&self.gpu.device, &self.bgl, &self.sampler, self.ui_atlas.width, self.ui_atlas.height, Some("ui-atlas"));
     }
 
+    /// The framebuffer atlas follows the framebuffer's text scale so
+    /// `draw_text` at the default size is as crisp as the UI.
+    fn ensure_fb_atlas(&mut self) {
+        let scale = argon_core::text_scale_for_height(self.height);
+        if self.atlas.scale == scale && self.atlas.mode() == self.font_mode {
+            return;
+        }
+        self.atlas = Atlas::new(self.fonts.clone(), self.font_mode, scale);
+        self.atlas_tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, self.atlas.width, self.atlas.height, Some("atlas"));
+    }
+
+    /// Largest display scale whose composite fits the device's texture limit.
+    fn max_display_scale(&self) -> u32 {
+        let limit = self.gpu.device.limits().max_texture_dimension_2d.max(1);
+        (limit / self.width.max(1)).min(limit / self.height.max(1)).clamp(1, 8)
+    }
+
     fn rebuild_composite(&mut self) {
+        // The composite is framebuffer x display scale; never let it exceed
+        // what the GPU can allocate (a small framebuffer with a large scale,
+        // then a resize to a big framebuffer, would otherwise overflow).
+        self.display_scale = self.display_scale.min(self.max_display_scale());
         let (cw, ch) = (self.width * self.display_scale, self.height * self.display_scale);
         self.composite = create_texture(&self.gpu.device, &self.bgl, &self.sampler, cw, ch, Some("composite"));
         self.present_bind_group = None;
@@ -486,7 +514,11 @@ impl Renderer {
         self.width = width;
         self.height = height;
         self.framebuffer = create_texture(&self.gpu.device, &self.bgl, &self.sampler, width, height, Some("framebuffer"));
+        // The old scale belonged to the old size; the host sets the right one
+        // before the next present.
+        self.display_scale = 1;
         self.rebuild_composite();
+        self.ensure_fb_atlas();
         self.state = DrawState::default();
         self.clear_framebuffer(Color::BLACK);
     }
@@ -848,6 +880,7 @@ impl Renderer {
         let fb_end = self.verts.len() as u32;
         let text_start = fb_end;
         if let Some(grid) = grid {
+            self.ensure_ui_atlas(grid.cell_scale() * self.display_scale, false);
             self.text_layer_verts(grid, cursor_on, tw, th);
         }
         let text_end = self.verts.len() as u32;
@@ -1091,7 +1124,7 @@ impl Renderer {
 
     fn text_layer_verts(&mut self, grid: &TextGrid, cursor_on: bool, tw: u32, th: u32) {
         let cols = grid.cols();
-        let s = self.display_scale;
+        let s = self.display_scale * grid.cell_scale();
         let (cw, chh) = ((CELL_W * s) as f32, (CELL_H * s) as f32);
         for (i, cell) in grid.cells().iter().enumerate() {
             let col = i % cols;
@@ -1203,11 +1236,14 @@ impl Renderer {
             target.height,
         );
         self.upload_verts();
+        // Filter radii and scanline pitch are in "text cells": one unit is the
+        // framebuffer's text scale in pixels, so the look is the same at
+        // every resolution.
+        let ts = argon_core::text_scale_for_height(self.height) as f32;
         let params = PresentParams {
-            // Filter radii are in framebuffer pixels regardless of scale.
-            texel: [1.0 / self.width as f32, 1.0 / self.height as f32],
+            texel: [ts / self.width as f32, ts / self.height as f32],
             mode: self.filter.0,
-            rows: self.height as f32,
+            rows: self.height as f32 / ts,
             rect: [ox, oy, dw as f32, dh as f32],
         };
         self.gpu.queue.write_buffer(&self.present_params, 0, bytemuck::bytes_of(&params));

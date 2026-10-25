@@ -2,9 +2,9 @@
 -- Arrows turn. Your ribbon is a wall; so is theirs. Z restarts.
 alt_screen()
 local w, h = screen_size()
-local cell = 4                       -- grid step in pixels
+local cell = math.max(4, h // 100)   -- grid step: 4 px at 640x400, 8 at 1280x800
 local cols, rows = w // cell, (h - 40) // cell
-local top = 40                       -- HUD height
+local top = h // 10                  -- HUD height
 
 local function setup()
   local walls = {}                   -- walls[y*cols+x] = owner
@@ -27,8 +27,9 @@ local function py(y) return top + y * cell end
 local function draw_arena()
   cls(rgb(2, 6, 14))
   -- Floor: faint grid lines like the arena.
-  for x = 0, w, 40 do line(x, top, x, h, rgb(10, 30, 46)) end
-  for y = top, h, 40 do line(0, y, w, y, rgb(10, 30, 46)) end
+  local g = cell * 10
+  for x = 0, w, g do line(x, top, x, h, rgb(10, 30, 46)) end
+  for y = top, h, g do line(0, y, w, y, rgb(10, 30, 46)) end
   line_width(2)
   rect(1, top + 1, w - 2, h - top - 2, rgb(0, 150, 190))
   line_width(1)
@@ -112,19 +113,21 @@ while true do
   -- HUD (redrawn every frame on top of the persistent arena).
   fill_rect(0, 0, w, top, rgb(2, 6, 14))
   line(0, top - 1, w, top - 1, rgb(0, 150, 190))
-  draw_text(12, 10, string.format("YOU %d", score[1]), p1.color, 2)
-  draw_text(w - 12 - 6 * 16, 10, string.format("%d CLU", score[2]), p2.color, 2)
-  draw_text(w / 2 - 88, 14, "L I G H T   C Y C L E S", rgb(180, 240, 255))
+  local ts = h // 400
+  draw_text(12, 10, string.format("YOU %d", score[1]), p1.color, 2 * ts)
+  draw_text(w - 12 - 6 * 16 * ts, 10, string.format("%d CLU", score[2]), p2.color, 2 * ts)
+  draw_text(w / 2 - 88 * ts, 14, "L I G H T   C Y C L E S", rgb(180, 240, 255))
   draw_head(p1)
   draw_head(p2)
   if state == "ready" then
-    draw_text(w / 2 - 48, h / 2 - 8, "GET READY", rgb(255, 255, 255), 2)
+    draw_text(w / 2 - 72, h / 2 - 16, "GET READY", rgb(255, 255, 255), 2 * (h // 400))
   elseif state == "over" then
     local msg = p1.alive and "YOU WIN" or (p2.alive and "DEREZZED" or "DRAW")
-    fill_rect(w / 2 - 120, h / 2 - 30, 240, 60, rgb(2, 6, 14))
-    rect(w / 2 - 120, h / 2 - 30, 240, 60, rgb(0, 200, 240))
-    draw_text(w / 2 - #msg * 8, h / 2 - 20, msg, p1.alive and p1.color or p2.color, 2)
-    draw_text(w / 2 - 60, h / 2 + 8, "Z to play again", rgb(150, 200, 220))
+    local ts = h // 400
+    fill_rect(w / 2 - 120 * ts, h / 2 - 30 * ts, 240 * ts, 60 * ts, rgb(2, 6, 14))
+    rect(w / 2 - 120 * ts, h / 2 - 30 * ts, 240 * ts, 60 * ts, rgb(0, 200, 240))
+    draw_text(w / 2 - #msg * 8 * ts, h / 2 - 20 * ts, msg, p1.alive and p1.color or p2.color, 2 * ts)
+    draw_text(w / 2 - 60 * ts, h / 2 + 8 * ts, "Z to play again", rgb(150, 200, 220))
   end
   flip()
 end

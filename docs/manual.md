@@ -11,9 +11,12 @@ SYNOPSIS
     argon docs [--compact]
 
 DESCRIPTION
-    Argon boots into its own small computer: a shell, an editor, a scaled
-    640x400 display with an 80x25 text layer, a sandboxed disk and a Luau
-    runtime. Programs are single .lua files or cart folders. Nothing a program
+    Argon boots into its own small computer: a shell, an editor, an 80x25
+    text layer over a high-resolution pixel display, a sandboxed disk and a
+    Luau runtime. The shell fills the window with the largest 16:10 multiple
+    of 640x400 (text cells scale so the grid stays 80x25); programs run at
+    1280x800 by default or any resolution they ask for, including the
+    window's native size. Programs are single .lua files or cart folders. Nothing a program
     does can reach outside the virtual disk.
 
     Data lives in ~/.argon/ (disk/, export/, config.toml, history.txt).
@@ -65,8 +68,8 @@ THE SHELL
     case-insensitively. DEMOS/ is read-only; COPY a demo to edit it.
 
     A .glsl file is a program by itself: RUN wraps a Shadertoy-style
-    fragment shader (mainImage) in a full-screen draw loop with the mouse
-    feeding iMouse. NEW name.glsl creates one; the editor highlights GLSL.
+    fragment shader (mainImage) in a full-screen draw loop at the window's
+    native resolution, with the mouse feeding iMouse. NEW name.glsl creates one; the editor highlights GLSL.
     Header settings use // argon: resolution = "hd". See DEMOS/shadertoy.
 
 THE EDITOR
@@ -120,13 +123,17 @@ PROGRAMS
         end
 
     A program may switch resolution at any time: set_resolution("retro")
-    (320x240), "tiny", "classic", "hd" or "WxH". Combined with alt_screen()
-    the shell comes back untouched at 640x400 when the program ends.
+    (320x240), "tiny" (128x128), "classic" (640x400), "hd" (1280x800, the
+    default), "uhd" (2560x1600), "native" (the window) or "WxH". Low
+    resolutions are integer-scaled with sharp pixels. Combined with
+    alt_screen() the shell comes back untouched when the program ends.
+    draw_text's default size follows the resolution (2x glyphs at hd), so
+    pixel text matches the text grid.
 
     Settings can be given in a comment header of a single file:
 
-        -- argon: resolution = "retro"      (tiny 128x128, retro 320x240,
-        -- argon: fps = 30                   classic 640x400, hd 1280x720, WxH)
+        -- argon: resolution = "retro"      (tiny, retro, classic, hd, uhd,
+        -- argon: fps = 30                   native, or WxH)
 
     or in cart.toml next to main.lua:
 
@@ -203,6 +210,8 @@ FILES
 HEADLESS
     argon shell --headless --keys "help{enter}" --text --screenshot out.png
     argon run DEMOS/pong --headless --frames 120 --screenshot pong.png
+    argon shell --headless --window 1920x1200 --screenshot big.png
+    (--raw writes the unfiltered framebuffer instead of the display)
 
     Key scripts type plain characters; braces hold special keys and
     directives: {enter} {esc} {tab} {f5} {up} {ctrl+s} {shift+right}

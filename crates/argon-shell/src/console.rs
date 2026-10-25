@@ -9,7 +9,7 @@ use argon_core::config::{Config, Manifest, Paths};
 use argon_core::draw::DrawCmd;
 use argon_core::input::{InputState, KeyCode, KeyEvent, MouseButton};
 use argon_core::vfs::{self, Jail, ProgramKind, ProgramLocation};
-use argon_core::{Color, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use argon_core::{shell_resolution_for_window, Color, Resolution, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use argon_audio::{AudioCmd, AudioEngine};
 use argon_lua::machine::{MachineOptions, NoFlip};
 use argon_lua::program::{spawn_program, ProgramExit, ProgramHandle, ProgramSpec};
@@ -45,6 +45,8 @@ struct Running {
     /// The shell's text layer before RUN, restored if the program used
     /// `alt_screen()`.
     shell_grid: TextGrid,
+    /// Shell resolution when the program started (alt screen restore).
+    shell_res: (u32, u32),
     alt_screen: bool,
     /// Cart manifest filter override.
     filter: String,
@@ -89,6 +91,15 @@ pub struct Console {
     /// Fixed frame time handed to programs (headless/CI); None = measured.
     pub fixed_dt: Option<f64>,
 
+    /// Host window size in pixels (set by the host on resize).
+    window: (u32, u32),
+    /// Shell/editor resolution: the largest 16:10 multiple of 640x400 that
+    /// fits the window.
+    shell_res: (u32, u32),
+    /// The banner is printed on the first frame, once the host has told us
+    /// the window size.
+    banner_pending: bool,
+
     disk: Jail,
     api: ApiTable,
     audio: AudioEngine,
@@ -129,6 +140,10 @@ impl Console {
             input: InputState::default(),
             prompt_row: 0,
 
+            window: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            shell_res: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            banner_pending: true,
+
             cwd: String::new(),
             imm,
             program_started: false,
@@ -139,7 +154,6 @@ impl Console {
             audio: if audio { AudioEngine::new() } else { AudioEngine::disabled() },
         };
 
-        c.banner();
         c.prompt_row = c.grid.cursor_row;
         Ok(c)
     }
@@ -165,11 +179,58 @@ impl Console {
         self.mode == Mode::Running
     }
 
+    /// The host tells us its window size; the shell fits it with the largest
+    /// 16:10 multiple of 640x400 (text stays 80x25). Programs that asked for
+    /// `native` get the window's exact size.
+    pub fn set_window_size(&mut self, w: u32, h: u32) {
+        let w = w.max(1);
+        let h = h.max(1);
+        if (w, h) == self.window {
+            return;
+        }
+        self.window = (w, h);
+        let res = shell_resolution_for_window(w, h);
+        if res != self.shell_res {
+            self.shell_res = res;
+            if self.mode != Mode::Running {
+                self.reflow_shell();
+            }
+        }
+    }
+
+    pub fn window_size(&self) -> (u32, u32) {
+        self.window
+    }
+
+    /// Re-create the shell grid at the current shell resolution, keeping the
+    /// text (so a window resize does not lose the screen).
+    fn reflow_shell(&mut self) {
+        let (w, h) = self.shell_res;
+        let mut grid = TextGrid::for_pixels(w, h);
+        grid.fg = self.grid.fg;
+        grid.bg = self.grid.bg;
+        grid.cursor_visible = self.grid.cursor_visible;
+        for r in 0..self.grid.rows().min(grid.rows()) {
+            for c in 0..self.grid.cols().min(grid.cols()) {
+                if let Some(cell) = self.grid.get(c, r) {
+                    grid.put(c, r, *cell);
+                }
+            }
+        }
+        grid.cursor_col = self.grid.cursor_col.min(grid.cols() - 1);
+        grid.cursor_row = self.grid.cursor_row.min(grid.rows() - 1);
+        self.prompt_row = self.prompt_row.min(grid.rows() - 1);
+        self.grid = grid;
+        self.resolution = (w, h);
+        self.cmds.push(DrawCmd::Clear(self.theme.bg));
+    }
+
     /// Execute a shell line as if typed (used by `argon run`).
     pub fn execute_line(&mut self, line: &str) {
         if self.mode != Mode::Shell {
             return;
         }
+        self.flush_banner();
         let prompt = self.prompt_text();
         self.grid.println(&format!("{prompt}{line}"));
         self.execute(line);
@@ -196,8 +257,7 @@ impl Console {
         // A framed header line in the style of a system readout.
         self.print_colored(&rule, dim);
         let left = format!("  ARGON {}", argon_core::VERSION);
-        let right = format!("{}x{}  {}x{}  LUAU  DISK {}  ",
-            self.grid.cols(), self.grid.rows(), DEFAULT_WIDTH, DEFAULT_HEIGHT, shell::human_size(used).to_ascii_uppercase());
+        let right = format!("{}x{}  {}x{}  LUAU  DISK {}  ", self.grid.cols(), self.grid.rows(), self.resolution.0, self.resolution.1, shell::human_size(used).to_ascii_uppercase());
         let pad = cols.saturating_sub(left.chars().count() + right.chars().count());
         let row = self.grid.cursor_row;
         self.grid.put_str_colored(0, row, &left, accent, None);
@@ -257,6 +317,7 @@ impl Console {
     }
 
     pub fn key(&mut self, ev: KeyEvent) {
+        self.flush_banner();
         self.input.key_event(&ev);
         match self.mode {
             Mode::Shell => {
@@ -619,14 +680,16 @@ impl Console {
         };
         let save_jail = self.disk.sub("SAVE").ok();
 
-        let (w, h) = manifest.resolution();
+        // Shadertoy-style .glsl programs default to the window's native size.
+        let requested = if loc.kind == ProgramKind::Glsl && !manifest.has_resolution() { Resolution::Native } else { manifest.resolution() };
+        let (w, h) = requested.resolve(self.window);
         let main_name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { vfs::file_name(&loc.main).to_string() };
         let spec = ProgramSpec {
             main_name: main_name.clone(),
             source,
             jail,
             save_jail,
-            options: MachineOptions { width: w, height: h, fps: manifest.fps.clamp(1, 240), main_name, seed: self.program_seed(), immediate: false },
+            options: MachineOptions { width: w, height: h, fps: manifest.fps.clamp(1, 240), main_name, seed: self.program_seed(), immediate: false, window: self.window },
         };
         let handle = spawn_program(spec);
         let resolution_changed = (w, h) != self.resolution;
@@ -635,7 +698,8 @@ impl Console {
         grid.cursor_visible = false;
         self.input.clear_all();
         let shell_grid = self.grid.clone();
-        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1), shell_grid, alt_screen: false, filter: manifest.filter.to_ascii_lowercase() });
+        let shell_res = self.shell_res;
+        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1), shell_grid, shell_res, alt_screen: false, filter: manifest.filter.to_ascii_lowercase() });
         self.mode = Mode::Running;
         self.program_started = true;
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
@@ -832,9 +896,7 @@ impl Console {
 
     /// Back in the shell after the editor: redraw a clean shell screen.
     fn restore_shell_grid(&mut self) {
-        if self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {
-            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
-        }
+        self.resolution = self.shell_res;
         self.grid = TextGrid::for_pixels(self.resolution.0, self.resolution.1);
         self.grid.fg = self.theme.fg;
         self.grid.bg = None;
@@ -952,8 +1014,20 @@ impl Console {
     // ----- frame -----------------------------------------------------------------------------
 
     /// Advance one display frame. `dt` is the display frame time.
+    /// Print the boot banner once, as late as possible so it reports the
+    /// window-fit resolution.
+    fn flush_banner(&mut self) {
+        if self.banner_pending && self.mode == Mode::Shell {
+            self.banner_pending = false;
+            self.grid.locate(0, self.prompt_row);
+            self.banner();
+            self.prompt_row = self.grid.cursor_row;
+        }
+    }
+
     pub fn update(&mut self, dt: f64) -> FrameOutput {
         self.time += dt;
+        self.flush_banner();
         let cursor_on = ((self.time * 2.5) as u64).is_multiple_of(2);
         let mut cmds = std::mem::take(&mut self.cmds);
 
@@ -1081,8 +1155,8 @@ impl Console {
 
         if from_editor {
             self.mode = Mode::Editor;
-            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
-            self.grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            self.resolution = self.shell_res;
+            self.grid = TextGrid::for_pixels(self.shell_res.0, self.shell_res.1);
             cmds.push(DrawCmd::Clear(self.theme.bg));
             if let Some(ed) = &mut self.editor {
                 match &exit {
@@ -1102,18 +1176,33 @@ impl Console {
         }
 
         self.mode = Mode::Shell;
-        if r.alt_screen {
+        if r.alt_screen && self.shell_res == r.shell_res {
             // The program drew on the alternate screen: bring the shell back
             // (the host resizes before running these commands, so the saved
-            // 640x400 screen copies back cleanly even after set_resolution).
-            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            // shell screen copies back cleanly even after set_resolution).
+            self.resolution = self.shell_res;
             cmds.push(DrawCmd::RestoreScreen);
             self.grid = r.shell_grid;
             self.grid.locate(0, self.prompt_row);
-        } else if r.resolution_changed || self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {
-            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
-            self.grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        } else if r.alt_screen || r.resolution_changed || self.resolution != self.shell_res {
+            // Resolution differs from the shell's (or the window was resized
+            // meanwhile): start a clean shell screen.
+            self.resolution = self.shell_res;
+            self.grid = TextGrid::for_pixels(self.shell_res.0, self.shell_res.1);
+            self.grid.fg = self.theme.fg;
             cmds.push(DrawCmd::Clear(self.theme.bg));
+            if r.alt_screen {
+                // Keep the shell text even though the pixels are gone.
+                let old = r.shell_grid;
+                for row in 0..old.rows().min(self.grid.rows()) {
+                    for col in 0..old.cols().min(self.grid.cols()) {
+                        if let Some(c) = old.get(col, row) {
+                            self.grid.put(col, row, *c);
+                        }
+                    }
+                }
+                self.grid.locate(0, self.prompt_row.min(self.grid.rows() - 1));
+            }
         } else {
             // Keep the program's screen; continue below its text cursor.
             self.grid = r.grid;
@@ -1249,6 +1338,7 @@ mod tests {
     #[test]
     fn banner_help_and_lua_at_prompt() {
         let (mut c, _d) = console();
+        c.update(0.016);
         let text = c.screen_text();
         assert!(text.contains("ARGON"));
         type_line(&mut c, "EVAL 2^10");

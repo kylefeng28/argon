@@ -1,7 +1,7 @@
 -- particles: 20,000 pixels moving at 60 fps. Hold A (Z) to attract them.
 alt_screen()
 local w, h = screen_size()
-local n = 20000
+local n = 20000 * (h // 400)
 local px, py, vx, vy = {}, {}, {}, {}
 for i = 1, n do
   px[i], py[i] = random() * w, random() * h

@@ -140,7 +140,7 @@ impl Default for Manifest {
             title: String::new(),
             author: String::new(),
             api: 1,
-            resolution: "classic".to_string(),
+            resolution: "hd".to_string(),
             color: "truecolor".to_string(),
             palette: None,
             fps: 60,
@@ -172,8 +172,13 @@ impl Manifest {
         Manifest::parse(&toml_lines.join("\n")).unwrap_or_default()
     }
 
-    pub fn resolution(&self) -> (u32, u32) {
-        crate::resolution_preset(&self.resolution).unwrap_or((crate::DEFAULT_WIDTH, crate::DEFAULT_HEIGHT))
+    /// Was a resolution given explicitly (header or cart.toml)?
+    pub fn has_resolution(&self) -> bool {
+        !self.resolution.is_empty() && self.resolution != "hd"
+    }
+
+    pub fn resolution(&self) -> crate::Resolution {
+        crate::resolution_preset(&self.resolution).unwrap_or(crate::Resolution::Fixed(crate::DEFAULT_WIDTH, crate::DEFAULT_HEIGHT))
     }
 }
 
@@ -192,8 +197,9 @@ mod tests {
     #[test]
     fn header_manifest() {
         let m = Manifest::from_header("-- argon: resolution = \"retro\"\n-- argon: fps = 30\nprint(1)");
-        assert_eq!(m.resolution(), (320, 240));
+        assert_eq!(m.resolution(), crate::Resolution::Fixed(320, 240));
         assert_eq!(m.fps, 30);
-        assert_eq!(Manifest::from_header("print(1)").resolution(), (640, 400));
+        assert_eq!(Manifest::from_header("print(1)").resolution(), crate::Resolution::Fixed(1280, 800));
+        assert_eq!(Manifest::from_header("// argon: resolution = \"native\"").resolution(), crate::Resolution::Native);
     }
 }

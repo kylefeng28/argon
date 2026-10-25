@@ -114,3 +114,17 @@ fn sprites_and_render_targets() {
     assert_eq!(px(&buf, 32, 0, 0), Color::rgb(0, 255, 255));
     assert_eq!(px(&buf, 32, 1, 0), Color::rgb(0, 255, 0));
 }
+
+#[test]
+fn resize_after_high_display_scale_does_not_exceed_texture_limits() {
+    // A 320x200 program at display scale 8, then back to a large shell
+    // resolution: the composite must not be allocated at 8x the new size.
+    let Some(mut r) = renderer(320, 200) else { return };
+    r.set_display_scale(8);
+    r.render(&[DrawCmd::Clear(Color::BLACK)], None, false);
+    r.resize(2560, 1600);
+    r.set_display_scale(1);
+    r.render(&[DrawCmd::Clear(Color::BLACK)], None, false);
+    let (w, h, _) = r.read_display(1);
+    assert_eq!((w, h), (2560, 1600));
+}

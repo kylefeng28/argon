@@ -82,7 +82,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 halo.r = max(halo.r, max(fr.r - base.r, 0.0) * 0.6);
             }
             color += halo * 2.0;
-            // White-hot core on the brightest strokes.
+            // Lit strokes themselves get a little hotter (keeps text punchy),
+            // and the very brightest go white at the core.
+            color += base * 0.35 * smoothstep(0.25, 0.7, base_lum);
             let core = pow(clamp(base_lum, 0.0, 1.0), 6.0);
             color = mix(color, vec3<f32>(1.0), core * 0.3);
         }

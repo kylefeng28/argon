@@ -36,7 +36,7 @@ while true do
     end
   end
   draw_text(8, 8, f[1], rgb(0, 0, 0), 2)
-  draw_text(8, h - 24, "LEFT/RIGHT: change function   ESC: quit", rgb(80, 80, 80))
+  draw_text(8, h - 16 * (h // 400) - 8, "LEFT/RIGHT: change function   ESC: quit", rgb(80, 80, 80))
   if button_pressed("right") then which = which % #funcs + 1 end
   if button_pressed("left") then which = (which - 2) % #funcs + 1 end
   flip()

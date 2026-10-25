@@ -162,14 +162,14 @@ pub fn human_size(b: u64) -> String {
 /// program on its own.
 pub fn new_shader_template(name: &str) -> String {
     format!(
-        "// {name}\n// A Shadertoy-style shader. RUN it directly; the mouse feeds iMouse.\n// Settings: // argon: resolution = \"hd\"\n\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n    vec2 uv = fragCoord / iResolution.xy;\n    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));\n    fragColor = vec4(col, 1.0);\n}}\n"
+        "// {name}\n// A Shadertoy-style shader. RUN it directly; the mouse feeds iMouse.\n// Settings: // argon: resolution = \"hd\"   (default for .glsl is native)\n\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n    vec2 uv = fragCoord / iResolution.xy;\n    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));\n    fragColor = vec4(col, 1.0);\n}}\n"
     )
 }
 
 /// Template for `NEW name`.
 pub fn new_program_template(name: &str) -> String {
     format!(
-        "-- {name}\n-- Press F5 to run, Esc to stop, F1 for the catalog.\n\ncls()\nprint(\"Hello from {name}!\")\n\nwhile true do\n  fill_circle(320 + 100 * math.sin(time()), 200, 40, rgb(255, 200, 0))\n  flip()\nend\n"
+        "-- {name}\n-- Press F5 to run, Esc to stop, F1 for the catalog.\n\nlocal w, h = screen_size()\ncls()\nprint(\"Hello from {name}!\")\n\nwhile true do\n  fill_circle(w / 2 + w / 6 * math.sin(time()), h / 2, h / 10, rgb(255, 200, 0))\n  flip()\nend\n"
     )
 }
 

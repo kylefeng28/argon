@@ -4,7 +4,7 @@
 -- Mouse: left button paints live cells, right button erases, wheel changes speed.
 alt_screen()
 local w, h = screen_size()
-local cs = 4
+local cs = math.max(4, h // 100)   -- 4 px cells at 640x400, 8 at 1280x800
 local cols, rows = w // cs, h // cs
 local N = cols * rows
 
@@ -119,9 +119,10 @@ while true do
       heat[i] = 0
     end
   end
-  fill_rect(0, 0, w, 14, rgb(2, 6, 14))
-  draw_text(4, -1, string.format("LIFE  gen %d  %d gen/s%s", gen, speed, paused and "  PAUSED" or ""), rgb(150, 230, 255))
-  draw_text(w - 420, -1, "Z pause  X step  C clear  R seed  1 gun  2 pulsar  3 R", rgb(80, 130, 160))
+  local ts = h // 400
+  fill_rect(0, 0, w, 14 * ts, rgb(2, 6, 14))
+  draw_text(4, -ts, string.format("LIFE  gen %d  %d gen/s%s", gen, speed, paused and "  PAUSED" or ""), rgb(150, 230, 255))
+  draw_text(w - 420 * ts, -ts, "Z pause  X step  C clear  R seed  1 gun  2 pulsar  3 R", rgb(80, 130, 160))
   if inside then
     -- A crosshair where the mouse is (Argon draws no cursor).
     local cx, cy = (mx // cs) * cs, (my // cs) * cs

@@ -80,13 +80,15 @@ while true do
     px, pz = px * cy_ + pz * sy_, -px * sy_ + pz * cy_
     py, pz = py * cx_ - pz * sx_, py * sx_ + pz * cx_
     local depth = 1 / (1 + pz / (s.scale * 6))
-    local sx, sy = w / 2 + px * s.scale * zoom * depth, h / 2 - py * s.scale * zoom * depth
+    local k = s.scale * zoom * depth * (h / 400)
+    local sx, sy = w / 2 + px * k, h / 2 - py * k
     local age = i / total
     local col = hsv((hue0 + age * 80 + pz) % 360, 0.85, 0.15 + 0.6 * age)
     if age > 0.97 then fill_rect(sx - 1, sy - 1, 2, 2, col) else pixel(sx, sy, col) end
   end
   blend("alpha")
-  fill_rect(0, 0, 200, 14, rgb(2, 4, 12))
-  draw_text(4, -1, s.name .. "  Z next  X hue  drag/wheel", rgb(150, 230, 255))
+  local ts = h // 400
+  fill_rect(0, 0, 200 * ts, 14 * ts, rgb(2, 4, 12))
+  draw_text(4, -ts, s.name .. "  Z next  X hue  drag/wheel", rgb(150, 230, 255))
   flip()
 end

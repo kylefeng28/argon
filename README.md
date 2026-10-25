@@ -32,7 +32,8 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   `DEMOS/shadertoy/` or your own folder as-is.
 - Audio: a chip-style synth (`beep`, `tone` on 8 channels, square/triangle/
   saw/sine/noise, envelopes, slides) plus WAV/OGG playback through cpal.
-- wgpu renderer: persistent 640x400 framebuffer (per-cart resolution),
+- wgpu renderer: persistent framebuffer at the cart's resolution (1280x800
+  default, `native` available; the shell fills the window at 16:10),
   pixel-exact CPU-rasterized primitives, sprites with rotation/scale/flip,
   render-to-texture, blend modes, clip, camera, 8x16 text layer, integer-scaled
   presentation with display filters (glow (bloom halo), scanlines, vignette),
@@ -75,6 +76,7 @@ source tools/headless-env.sh      # on a machine without a GPU/display
 tools/smoke.sh                    # run every demo and screenshot shell/editor
 ./target/debug/argon shell --headless --keys "help{enter}" --text --screenshot out.png
 ./target/debug/argon run DEMOS/shapes --headless --frames 30 --screenshot shapes.png
+./target/debug/argon shell --headless --window 1920x1200 --screenshot big.png
 ```
 
 The GPU tests and the headless runner need any Vulkan/Metal/DX12 adapter; a

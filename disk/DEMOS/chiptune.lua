@@ -111,8 +111,9 @@ while true do
 
   -- Visualizer: a piano roll of the next two bars for each track.
   cls(rgb(8, 8, 20))
-  draw_text(8, 8, "KOROBEINIKI", rgb(255, 255, 255), 2)
-  draw_text(8, 44, string.format("%d bpm  bar %2d/16  Z play/pause  UP/DOWN tempo  1-4 mute tracks  R restart", bpm, (step - 1) // 8 + 1), rgb(150, 150, 190))
+  local ts = h // 400
+  draw_text(8, 8, "KOROBEINIKI", rgb(255, 255, 255), 2 * ts)
+  draw_text(8, 44 * ts, string.format("%d bpm  bar %2d/16  Z play/pause  UP/DOWN tempo  1-4 mute tracks  R restart", bpm, (step - 1) // 8 + 1), rgb(150, 150, 190))
 
   -- name, notes, color, lowest semitone shown (relative to A2), semitone span
   local tracks = {
@@ -120,12 +121,13 @@ while true do
     { "harmony", harmony, rgb(180, 120, 255), 8, 22 },
     { "bass", bass, rgb(120, 200, 255), -14, 28 },
   }
-  local roll_x, roll_w, cell = 100, w - 110, (w - 110) / 32
+  local ts = h // 400
+  local roll_x, roll_w, cell = 100 * ts, w - 110 * ts, (w - 110 * ts) / 32
   for ti, t in ipairs(tracks) do
-    local y0 = 80 + (ti - 1) * 90
+    local y0 = (80 + (ti - 1) * 90) * ts
     local col = muted[ti] and rgb(70, 70, 80) or t[3]
-    draw_text(8, y0 + 30, t[1], col)
-    fill_rect(roll_x, y0, roll_w, 80, rgb(16, 16, 36))
+    draw_text(8, y0 + 30 * ts, t[1], col)
+    fill_rect(roll_x, y0, roll_w, 80 * ts, rgb(16, 16, 36))
     local last_hz
     for k = 0, 31 do
       local i = (step - 1 + k) % total + 1
@@ -137,25 +139,25 @@ while true do
       if hz then
         -- Map pitch to height within the track's range.
         local semis = 12 * math.log(hz / 110, 2)
-        local y = y0 + 76 - clamp((semis - t[4]) / t[5], 0, 1) * 72
+        local y = y0 + (76 - clamp((semis - t[4]) / t[5], 0, 1) * 72) * ts
         local bright = (k == 0) and rgb(255, 255, 255) or col
-        fill_rect(roll_x + k * cell, y, cell - 1, 4, bright)
+        fill_rect(roll_x + k * cell, y, cell - 1, 4 * ts, bright)
       end
     end
-    line(roll_x, y0, roll_x, y0 + 80, rgb(255, 255, 255))
+    line(roll_x, y0, roll_x, y0 + 80 * ts, rgb(255, 255, 255))
   end
   -- Drums row.
-  local y0 = 80 + 3 * 90
+  local y0 = (80 + 3 * 90) * ts
   draw_text(8, y0 + 2, "drums", muted[4] and rgb(70, 70, 80) or rgb(255, 120, 120))
   for k = 0, 31 do
     local i = (step - 1 + k) % total + 1
     local d = drums[i]
     if d ~= "." then
       local c = d == "k" and rgb(255, 100, 100) or d == "s" and rgb(255, 180, 120) or rgb(200, 200, 200)
-      local size = d == "k" and 10 or d == "s" and 7 or 4
-      fill_rect(roll_x + k * cell, y0 + 12 - size / 2, cell - 1, size, muted[4] and rgb(70, 70, 80) or c)
+      local size = (d == "k" and 10 or d == "s" and 7 or 4) * ts
+      fill_rect(roll_x + k * cell, y0 + 12 * ts - size / 2, cell - 1, size, muted[4] and rgb(70, 70, 80) or c)
     end
   end
-  draw_text(roll_x, h - 20, string.format("lead %-4s  harmony %-4s  bass %-3s", lead_name, harm_name, bass_name), rgb(120, 120, 160))
+  draw_text(roll_x, h - 18 * ts, string.format("lead %-4s  harmony %-4s  bass %-3s", lead_name, harm_name, bass_name), rgb(120, 120, 160))
   flip()
 end

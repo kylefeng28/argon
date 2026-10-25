@@ -28,6 +28,6 @@ while true do
     draw_sprite(sheet, t.spr * 32, 0, 32, 32, t.x, t.y, { rotation = t.a, scale = t.s, origin_x = 16, origin_y = 16 })
   end
   draw_image(sheet, 8, h - 40, { scale = 1 })
-  draw_text(8, h - 56, "the sheet:", rgb(200, 200, 200))
+  draw_text(8, h - 72, "the sheet:", rgb(200, 200, 200))
   flip()
 end

@@ -3,7 +3,7 @@
 -- Up/Down change the flock size.
 alt_screen()
 local w, h = screen_size()
-local n = 220
+local n = 220 * (h // 400)
 local boids = {}
 local function spawn(i)
   local a = random() * math.pi * 2
@@ -11,8 +11,8 @@ local function spawn(i)
 end
 for i = 1, n do spawn(i) end
 
-local max_speed, min_speed = 3.2, 1.2
-local view, sep_dist = 42, 14
+local max_speed, min_speed = 3.2 * (h / 400), 1.2 * (h / 400)
+local view, sep_dist = 42 * (h / 400), 14 * (h / 400)
 local grid = {}
 local gs = view
 
@@ -77,8 +77,9 @@ while true do
       fx, fy = fx + dx / d * 0.5, fy + dy / d * 0.5
     end
     -- Soft walls.
-    if b.x < 40 then fx = fx + 0.08 elseif b.x > w - 40 then fx = fx - 0.08 end
-    if b.y < 40 then fy = fy + 0.08 elseif b.y > h - 40 then fy = fy - 0.08 end
+    local m = h / 10
+    if b.x < m then fx = fx + 0.08 elseif b.x > w - m then fx = fx - 0.08 end
+    if b.y < m then fy = fy + 0.08 elseif b.y > h - m then fy = fy - 0.08 end
     b.vx, b.vy = b.vx + fx, b.vy + fy
     local sp = math.sqrt(b.vx * b.vx + b.vy * b.vy)
     if sp > max_speed then b.vx, b.vy = b.vx / sp * max_speed, b.vy / sp * max_speed
@@ -115,6 +116,6 @@ while true do
     circle(target.x, target.y, 8 + math.sin(time() * 8) * 3, attract and rgb(120, 240, 255) or rgb(255, 120, 40))
   end
   draw_text(4, 2, string.format("FLOCK  %d boids  %.0f fps", n, 1 / math.max(delta_time(), 1e-4)), rgb(150, 230, 255))
-  draw_text(4, h - 14, "hold Z attract  X scatter  UP/DOWN size", rgb(80, 130, 160))
+  draw_text(4, h - 16 * (h // 400) - 2, "hold Z attract  X scatter  UP/DOWN size", rgb(80, 130, 160))
   flip()
 end

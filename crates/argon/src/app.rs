@@ -40,23 +40,24 @@ pub fn run(console: Console, startup_program: Option<String>) -> anyhow::Result<
 
 impl App {
     fn init_graphics(&mut self, event_loop: &ActiveEventLoop) {
-        let (vw, vh) = (argon_core::DEFAULT_WIDTH, argon_core::DEFAULT_HEIGHT);
+        // The window is a multiple of the 640x400 shell cell layout: at least
+        // 2x (1280x800), or as large as fits 85% of the monitor.
+        let (bw, bh) = (640u32, 400u32);
         let scale = if self.console.config.window_scale > 0 {
             self.console.config.window_scale
         } else {
-            // Largest integer scale that leaves some margin on the monitor.
             event_loop
                 .primary_monitor()
                 .map(|m| {
                     let s = m.size();
-                    ((s.width * 85 / 100) / vw).min((s.height * 85 / 100) / vh).max(1)
+                    ((s.width * 85 / 100) / bw).min((s.height * 85 / 100) / bh).max(2)
                 })
                 .unwrap_or(2)
         };
         let attrs = Window::default_attributes()
             .with_title("Argon")
-            .with_inner_size(PhysicalSize::new(vw * scale, vh * scale))
-            .with_min_inner_size(PhysicalSize::new(vw, vh));
+            .with_inner_size(PhysicalSize::new(bw * scale, bh * scale))
+            .with_min_inner_size(PhysicalSize::new(bw, bh));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_cursor_visible(false);
 
@@ -91,6 +92,8 @@ impl App {
         };
         surface.configure(&gpu.device, &config);
         let gpu = Arc::new(gpu);
+        self.console.set_window_size(config.width, config.height);
+        let (vw, vh) = argon_core::shell_resolution_for_window(config.width, config.height);
         let renderer = Renderer::new(gpu, vw, vh);
         self.gfx = Some(Graphics { window, surface, config, renderer });
 
@@ -173,6 +176,7 @@ impl ApplicationHandler for App {
                     g.config.height = size.height.max(1);
                     g.surface.configure(&g.renderer.gpu.device, &g.config);
                 }
+                self.console.set_window_size(size.width, size.height);
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::CursorMoved { position, .. } => {

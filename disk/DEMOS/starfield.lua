@@ -18,7 +18,7 @@ while true do
     local sy = h / 2 + s.y / s.z * h / 2
     local b = math.floor(255 * (1 - s.z))
     if s.z < 0.3 then
-      fill_rect(sx, sy, 2, 2, rgb(b, b, 255))
+      fill_rect(sx, sy, h // 200, h // 200, rgb(b, b, 255))
     else
       pixel(sx, sy, rgb(b, b, b))
     end

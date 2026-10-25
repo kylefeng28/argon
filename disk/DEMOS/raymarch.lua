@@ -88,7 +88,8 @@ local zoom = 1
 while true do
   zoom = clamp(zoom * 1.1 ^ mouse_wheel(), 0.4, 3)
   draw_shader(sh, { uniforms = { zoom = zoom } })
-  fill_rect(0, h - 18, w, 18, rgb(0, 0, 0, 160))
-  draw_text(4, h - 16, string.format("RAYMARCH  %.0f fps   drag to look  wheel zoom", 1 / math.max(delta_time(), 1e-4)), rgb(150, 220, 255))
+  local th = 16 * (h // 400) + 4
+  fill_rect(0, h - th, w, th, rgb(0, 0, 0, 160))
+  draw_text(4, h - th + 2, string.format("RAYMARCH  %.0f fps   drag to look  wheel zoom", 1 / math.max(delta_time(), 1e-4)), rgb(150, 220, 255))
   flip()
 end

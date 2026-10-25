@@ -1,7 +1,7 @@
 -- clock: an analog stopwatch since the program started.
 alt_screen()
 local w, h = screen_size()
-local cx, cy, r = w / 2, h / 2, 150
+local cx, cy, r = w / 2, h / 2, h * 0.375
 
 while true do
   cls(rgb(30, 30, 36))

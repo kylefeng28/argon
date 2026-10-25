@@ -1,6 +1,7 @@
 -- hud: a tactical readout in the style of a certain cyberpunk anime's
 -- field terminals. Everything is fake data; it just looks busy.
 -- argon: filter = "crt"
+-- argon: resolution = "classic"
 alt_screen()
 local w, h = screen_size()
 local G = rgb(40, 255, 170)         -- phosphor green

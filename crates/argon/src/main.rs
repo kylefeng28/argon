@@ -62,9 +62,13 @@ struct HeadlessArgs {
     /// Print the text layer to stdout at the end (headless)
     #[arg(long)]
     text: bool,
-    /// Screenshot scale factor; 1 = raw framebuffer without display filter
-    #[arg(long, default_value_t = 2)]
-    scale: u32,
+    /// Headless window size, e.g. 1920x1200 (shell fits it 16:10; native
+    /// programs use it exactly)
+    #[arg(long, default_value = "1280x800")]
+    window: String,
+    /// Write the raw framebuffer instead of the filtered display
+    #[arg(long)]
+    raw: bool,
 }
 
 fn main() -> anyhow::Result<()> {

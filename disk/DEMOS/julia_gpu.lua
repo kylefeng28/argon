@@ -44,7 +44,8 @@ while true do
     cr, ci = 0.7885 * math.cos(t), 0.7885 * math.sin(t)
   end
   draw_shader(sh, { uniforms = { c = { cr, ci }, zoom = zoom } })
-  fill_rect(0, h - 18, w, 18, rgb(0, 0, 0, 160))
-  draw_text(4, h - 16, string.format("c = %.4f %+.4fi   %s   wheel zoom", cr, ci, auto and "Z: mouse control" or "move mouse, hold to freeze, Z: orbit"), rgb(150, 220, 255))
+  local th = 16 * (h // 400) + 4
+  fill_rect(0, h - th, w, th, rgb(0, 0, 0, 160))
+  draw_text(4, h - th + 2, string.format("c = %.4f %+.4fi   %s   wheel zoom", cr, ci, auto and "Z: mouse control" or "move mouse, hold to freeze, Z: orbit"), rgb(150, 220, 255))
   flip()
 end

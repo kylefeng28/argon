@@ -26,7 +26,7 @@ A user should be able to:
 |---|-------|----------|
 | D1 | Scripting language | Lua only at launch. A C subset via a WebAssembly ABI may come at a future phase; the host API is designed language-neutral from day one. |
 | D2 | Platforms | Desktop (Windows, macOS, Linux) is the launch target. Browser (wasm + WebGPU) is important but secondary; nothing in the design may preclude it. |
-| D3 | Display | Default is a scaled virtual resolution in the PS2/early-HD class. Default 640x360, integer-scaled to the window. Higher resolutions up to native are opt-in per cart. |
+| D3 | Display | Programs default to 1280x800 (`hd`); `native` (the window's pixels) is opt-in per cart, and bare `.glsl` programs default to native. The shell and editor use the largest 16:10 multiple of 640x400 that fits the window and keep an 80x25 text grid at every size by scaling the 8x16 cell (2x at 800 rows, 3x at 1200). The pixel count rises with the display; the interaction model does not. |
 | D4 | Color | Per-cart setting: true color (default) or an indexed palette of 2 to 256 entries. |
 | D5 | Pointer | No mouse cursor anywhere in the UI. Mouse events may be exposed to programs later in the style of xterm/kitty mouse reporting. Shell and editor are keyboard-only. |
 | D6 | Shader language | GLSL, Shadertoy copy-paste compatible (`mainImage`, `iTime`, `iResolution`, `iChannel0..3`, ...). |
@@ -82,11 +82,11 @@ P2 = later phase.
 | ID | Priority | Requirement |
 |----|----------|-------------|
 | FR-C1 | P0 | Argon is a single executable that opens one window and boots directly into the shell. |
-| FR-C2 | P0 | The virtual display has a per-cart resolution, default 640x360. Presets: `tiny` 128x128, `retro` 320x180, `classic` 640x360, `hd` 1280x720, `native`. Arbitrary `WxH` is also accepted. |
+| FR-C2 | P0 | The virtual display has a per-cart resolution, default 1280x800. Presets: `tiny` 128x128, `retro` 320x240, `classic` 640x400, `hd` 1280x800, `uhd` 2560x1600, `native` (the window). Arbitrary `WxH` is also accepted. `.glsl` programs default to `native`. |
 | FR-C3 | P0 | The virtual display is integer-scaled to the largest multiple that fits the window, centered, with letterbox bars. Nearest-neighbor sampling. |
 | FR-C4 | P1 | Optional display filters selectable per cart or by the user: none, glow (halo around strokes, white-hot core), glass (specular rim and dispersion, the light-ribbon look), scanlines, neon (glow + glass + vignette, default), crt (glow + scanlines + vignette). Implemented in the presenter shader; headless screenshots at scale >= 2 include them. |
 | FR-C5 | P0 | Per-cart color mode: `truecolor` (default) or `palette = N` (2 <= N <= 256) with a user-defined palette. In palette mode color arguments are indices; in truecolor they are packed RGBA or `rgb()` values. |
-| FR-C6 | P0 | A text layer with a fixed character grid overlays the pixel framebuffer. Cell size is 8x16, so `classic` gives 80x25 cells. The layer is rasterized at the window's integer scale from a TrueType face (Share Tech Mono by default, ProggyClean optional) with the Unscii bitmap font as fallback for box-drawing and symbols, so UI text is sharp while program pixels stay chunky. The shell and editor use the same text layer as programs. |
+| FR-C6 | P0 | A text layer with a fixed character grid overlays the pixel framebuffer. The base cell is 8x16, scaled by round(height / 400) so every 16:10 resolution gives 80x25 cells (640x400 at 1x, 1280x800 at 2x, 1920x1200 at 3x). The layer is rasterized at the window's integer scale from a TrueType face (Share Tech Mono by default, ProggyClean optional) with the Unscii bitmap font as fallback for box-drawing and symbols, so UI text is sharp while program pixels stay chunky. The shell and editor use the same text layer as programs. |
 | FR-C7 | P0 | Fullscreen toggle and window scaling without affecting the cart's virtual resolution. |
 | FR-C8 | P0 | The console never shows a mouse cursor. |
 | FR-C9 | P0 | User-selectable UI theme for shell and editor persisted across launches. Default is `grid`: Tron: Legacy electric cyan on near-black blue with orange for errors and strings. Also: green phosphor, amber, blue, gray LCD. |

@@ -11,7 +11,13 @@ use std::sync::Arc;
 
 pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> anyhow::Result<()> {
     let gpu = Arc::new(Gpu::new(None).map_err(|e| anyhow::anyhow!(e))?);
-    let (w, h) = (argon_core::DEFAULT_WIDTH, argon_core::DEFAULT_HEIGHT);
+    let (win_w, win_h) = args
+        .window
+        .split_once('x')
+        .and_then(|(a, b)| Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<u32>().ok()?)))
+        .ok_or_else(|| anyhow::anyhow!("--window expects WxH, e.g. 1920x1200"))?;
+    console.set_window_size(win_w, win_h);
+    let (w, h) = argon_core::shell_resolution_for_window(win_w, win_h);
     let mut renderer = Renderer::new(gpu, w, h);
 
     // Set fixed frame time for reproducibility (this also sets PRNG to a fixed seed)
@@ -35,7 +41,8 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
                 match step {
                     Step::Key(ev) => console.key(ev),
                     Step::MouseMove(x, y) => {
-                        // Headless: the window is exactly the virtual screen.
+                        // Script coordinates are virtual pixels of the current
+                        // screen; present the rect as the screen itself.
                         let (vw, vh) = renderer.size();
                         console.mouse_move(x, y, (0.0, 0.0, vw as f32, vh as f32));
                     }
@@ -56,7 +63,9 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
             renderer.reset_program_state();
             console.program_started = false;
         }
-        renderer.set_display_scale(args.scale.max(1));
+        // Integer scale that fits the headless window, like the real one.
+        let (vw, vh) = renderer.size();
+        renderer.set_display_scale((win_w / vw).min(win_h / vh).max(1));
         renderer.set_font_mode(FontMode::parse(&console.config.font).unwrap_or_default());
         renderer.clear_color = out.clear_color;
         renderer.filter = DisplayFilter::parse(console.filter_name()).unwrap_or_default();
@@ -73,11 +82,12 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
         println!("{}", console.screen_text());
     }
     if let Some(path) = &args.screenshot {
-        let (w, h, pixels) = if args.scale <= 1 {
+        let (w, h, pixels) = if args.raw {
             let (w, h) = renderer.size();
-            (w, h, renderer.read_composite())
+            (w, h, renderer.read_framebuffer())
         } else {
-            renderer.read_display(args.scale)
+            let scale = renderer.display_scale();
+            renderer.read_display(scale)
         };
         let img = image::RgbaImage::from_raw(w, h, pixels).ok_or_else(|| anyhow::anyhow!("bad framebuffer size"))?;
         img.save(path)?;

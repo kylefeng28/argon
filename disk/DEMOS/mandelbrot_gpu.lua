@@ -76,7 +76,8 @@ while true do
   local iters = clamp(96 + math.log(zoom, 2) * 40, 96, 2000)
 
   draw_shader(sh, { uniforms = { center = { cx, cy }, zoom = zoom, iters = iters, palette = pal } })
-  fill_rect(0, h - 18, w, 18, rgb(0, 0, 0, 160))
-  draw_text(4, h - 16, string.format("%.8f %+.8fi  zoom %.0f  iter %d   drag/wheel  C palette  R reset", cx, cy, zoom, iters), rgb(150, 220, 255))
+  local th = 16 * (h // 400) + 4   -- one text row at this resolution
+  fill_rect(0, h - th, w, th, rgb(0, 0, 0, 160))
+  draw_text(4, h - th + 2, string.format("%.8f %+.8fi  zoom %.0f  iter %d   drag/wheel  C palette  R reset", cx, cy, zoom, iters), rgb(150, 220, 255))
   flip()
 end

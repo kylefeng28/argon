@@ -95,6 +95,8 @@ pub struct MachineOptions {
     pub seed: u64,
     /// Immediate mode: no frames, draws go straight to the shell screen.
     pub immediate: bool,
+    /// Host window size, for `set_resolution("native")`.
+    pub window: (u32, u32),
 }
 
 impl Default for MachineOptions {
@@ -106,6 +108,7 @@ impl Default for MachineOptions {
             main_name: "main.lua".to_string(),
             seed: 0x5eed,
             immediate: false,
+            window: (argon_core::DEFAULT_WIDTH, argon_core::DEFAULT_HEIGHT),
         }
     }
 }
@@ -150,6 +153,7 @@ pub struct Machine {
     pub shader_uniforms: HashMap<u32, [[f32; 4]; argon_core::shader::MAX_USER_UNIFORMS]>,
     /// Last mouse click position, for iMouse.zw.
     pub click_pos: (f32, f32),
+    pub window: (u32, u32),
 }
 
 impl Machine {
@@ -188,7 +192,13 @@ impl Machine {
             next_shader: 1,
             shader_uniforms: HashMap::new(),
             click_pos: (0.0, 0.0),
+            window: opts.window,
         }
+    }
+
+    /// Default size multiplier for `draw_text`, matching the text grid.
+    pub fn text_scale(&self) -> u32 {
+        argon_core::text_scale_for_height(self.height)
     }
 
     /// Shadertoy iMouse from the current input: xy = position (y up), zw =
@@ -214,7 +224,8 @@ impl Machine {
         self.alt_screen = true;
         self.cmds.push(DrawCmd::SaveScreen);
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
-        let mut fresh = TextGrid::new(self.grid.cols(), self.grid.rows());
+        // Same size and cell scale as the current screen.
+        let mut fresh = TextGrid::for_pixels(self.width, self.height);
         fresh.fg = self.grid.fg;
         fresh.bg = self.grid.bg;
         self.saved_grid = Some(std::mem::replace(&mut self.grid, fresh));

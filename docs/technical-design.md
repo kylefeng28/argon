@@ -103,6 +103,9 @@ program are released, audio voices are stopped (FR-A3).
 
 ### 3.1 Targets and layers
 
+- Resolutions: programs default to 1280x800; the shell uses the largest
+  16:10 multiple of 640x400 that fits the window; `native` is the window.
+  The text grid scales its 8x16 cell by round(height/400) so it stays 80x25.
 - Framebuffer: an `Rgba8Unorm` texture at the cart's virtual resolution.
   Persistent across frames (FR-G8). All Tier 1 draws go here (or to a user
   image when `set_target` is active).

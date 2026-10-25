@@ -1,7 +1,7 @@
 -- pong: up/down moves your paddle, the computer plays the right side.
 alt_screen()
 local w, h = screen_size()
-local pw, ph = 10, 60
+local pw, ph = h // 40, h * 0.15
 local left = { x = 20, y = h / 2 - ph / 2, score = 0 }
 local right = { x = w - 30, y = h / 2 - ph / 2, score = 0 }
 local ball = {}

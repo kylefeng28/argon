@@ -28,19 +28,54 @@ pub const CELL_W: u32 = 8;
 /// Height of one text cell in pixels.
 pub const CELL_H: u32 = 16;
 
-pub const DEFAULT_WIDTH: u32 = 640;
-pub const DEFAULT_HEIGHT: u32 = 400;
+/// Default program resolution (`hd`).
+pub const DEFAULT_WIDTH: u32 = 1280;
+pub const DEFAULT_HEIGHT: u32 = 800;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Named resolution presets (FR-C2).
-pub fn resolution_preset(name: &str) -> Option<(u32, u32)> {
+pub fn resolution_preset(name: &str) -> Option<Resolution> {
     match name.to_ascii_lowercase().as_str() {
-        "tiny" => Some((128, 128)),
-        "retro" => Some((320, 240)),
-        "classic" => Some((640, 400)),
-        "hd" => Some((1280, 720)),
-        _ => parse_wxh(name),
+        "tiny" => Some(Resolution::Fixed(128, 128)),
+        "retro" => Some(Resolution::Fixed(320, 240)),
+        "classic" => Some(Resolution::Fixed(640, 400)),
+        "hd" => Some(Resolution::Fixed(1280, 800)),
+        "uhd" => Some(Resolution::Fixed(2560, 1600)),
+        "native" => Some(Resolution::Native),
+        _ => parse_wxh(name).map(|(w, h)| Resolution::Fixed(w, h)),
     }
+}
+
+/// A requested virtual resolution: fixed pixels or the host window's size.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Resolution {
+    Fixed(u32, u32),
+    /// The window's own pixels (whatever the display gives us).
+    Native,
+}
+
+impl Resolution {
+    /// Concrete size given the current window size.
+    pub fn resolve(self, window: (u32, u32)) -> (u32, u32) {
+        match self {
+            Resolution::Fixed(w, h) => (w, h),
+            Resolution::Native => (window.0.clamp(16, 8192), window.1.clamp(16, 8192)),
+        }
+    }
+}
+
+/// How many times the 8x16 base cell is scaled at a given screen height, so
+/// the text grid stays around 80x25 instead of growing with the pixel count:
+/// 1 at 400 rows (classic), 2 at 800 (hd), 3 at 1200, 5 at 2160.
+pub fn text_scale_for_height(height: u32) -> u32 {
+    ((height as f32 / 400.0).round() as u32).max(1)
+}
+
+/// Largest 16:10 multiple of 640x400 that fits a window: the shell's
+/// resolution (FR-C2, D3).
+pub fn shell_resolution_for_window(win_w: u32, win_h: u32) -> (u32, u32) {
+    let k = (win_w / 640).min(win_h / 400).max(1);
+    (640 * k, 400 * k)
 }
 
 fn parse_wxh(s: &str) -> Option<(u32, u32)> {
