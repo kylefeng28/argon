@@ -1,14 +1,10 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! wgpu renderer for Argon: a persistent virtual framebuffer, a text layer
+//! composited over it, user images as render targets, and an integer-scaled
+//! presenter. Also runs headless for CI and screenshots.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod atlas;
+mod renderer;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use atlas::Atlas;
+pub use renderer::{Gpu, PresentTarget, Renderer};
+pub use wgpu;

@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! The Argon front end: the shell, the editor and the console state machine
+//! that owns them and the running program. Everything here draws through a
+//! [`argon_core::TextGrid`] plus draw commands; no GPU code.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod console;
+pub mod lineedit;
+pub mod shell;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use console::{Console, FrameOutput};
