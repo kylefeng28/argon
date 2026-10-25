@@ -6,4 +6,4 @@ pub mod console;
 pub mod lineedit;
 pub mod shell;
 
-pub use console::{Console, FrameOutput};
+pub use console::{Console, ConsoleOptions, FrameOutput};

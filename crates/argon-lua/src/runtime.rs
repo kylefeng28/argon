@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_carry_line_and_hint() {
+    fn errors_carry_line() {
         let (mut r, _d, _) = rt(false);
         let out = r.run_main("main.lua", "local a = 1\nfil_rect(1, 2, 3, 4)\n");
         match out {
