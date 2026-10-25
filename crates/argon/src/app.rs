@@ -1,21 +1,17 @@
 //! The windowed application (winit + wgpu).
 
 use crate::keymap;
+use argon_core::input::KeyCode;
 use argon_gfx::{wgpu, Gpu, PresentTarget, Renderer};
 use argon_shell::Console;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
-use winit::window::{Window, WindowId};
-/*
-use argon_core::input::KeyCode;
-use winit::event::ElementState;
-use winit::window::Fullscreen;
-*/
+use winit::window::{Fullscreen, Window, WindowId};
 
 struct Graphics {
     window: Arc<Window>,
@@ -43,12 +39,9 @@ pub fn run(console: Console, startup_program: Option<String>) -> anyhow::Result<
 impl App {
     fn init_graphics(&mut self, event_loop: &ActiveEventLoop) {
         let (vw, vh) = (argon_core::DEFAULT_WIDTH, argon_core::DEFAULT_HEIGHT);
-        /*
         let scale = if self.console.config.window_scale > 0 {
             self.console.config.window_scale
         } else {
-        */
-        let scale = {
             // Largest integer scale that leaves some margin on the monitor.
             event_loop
                 .primary_monitor()
@@ -65,11 +58,9 @@ impl App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_cursor_visible(false);
 
-        /*
         if self.console.config.fullscreen {
             window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         }
-        */
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
@@ -101,13 +92,11 @@ impl App {
         let renderer = Renderer::new(gpu, vw, vh);
         self.gfx = Some(Graphics { window, surface, config, renderer });
 
-        if let Some(_p) = self.startup_program.take() {
-            unimplemented!();
-            // self.console.execute_line(&format!("RUN {p}"));
+        if let Some(p) = self.startup_program.take() {
+            self.console.execute_line(&format!("RUN {p}"));
         }
     }
 
-    /*
     fn toggle_fullscreen(&mut self) {
         if let Some(g) = &self.gfx {
             let fs = g.window.fullscreen().is_none();
@@ -116,7 +105,6 @@ impl App {
             let _ = self.console.config.save(&self.console.paths.config);
         }
     }
-    */
 
     fn redraw(&mut self) {
         let Some(g) = &mut self.gfx else { return };
@@ -127,6 +115,10 @@ impl App {
         let out = self.console.update(dt);
         if out.resolution != g.renderer.size() {
             g.renderer.resize(out.resolution.0, out.resolution.1);
+        }
+        if self.console.program_started {
+            g.renderer.reset_program_state();
+            self.console.program_started = false;
         }
         g.renderer.clear_color = out.clear_color;
         g.renderer.render(&out.cmds, Some(&out.grid), out.cursor_on);
@@ -176,14 +168,12 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::KeyboardInput { event, .. } => {
                 let ev = keymap::map_event(&event, self.mods);
-                /*
                 // Host shortcuts: F11 / Alt+Enter fullscreen.
                 let fullscreen_key = ev.code == KeyCode::F11 || (ev.code == KeyCode::Enter && ev.mods.alt);
                 if event.state == ElementState::Pressed && !event.repeat && fullscreen_key {
                     self.toggle_fullscreen();
                     return;
                 }
-                */
                 self.console.key(ev);
                 if self.console.wants_quit() {
                     event_loop.exit();

@@ -26,6 +26,7 @@ bytemuck = { version = "1.21", features = ["derive"] }
 mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
 directories = "6"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"

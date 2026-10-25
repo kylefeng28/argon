@@ -1,6 +1,8 @@
 mod app;
 mod demos;
+mod headless;
 mod keymap;
+mod script;
 
 use argon_core::config::{Config, Paths};
 use argon_shell::{Console, ConsoleOptions};
@@ -16,6 +18,46 @@ struct Cli {
     /// Keep all data next to the executable (argon-data/)
     #[arg(long, global = true)]
     portable: bool,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Cmd {
+    /// Run a program (virtual path on the disk, e.g. DEMOS/pong)
+    Run {
+        program: String,
+        #[command(flatten)]
+        head: HeadlessArgs,
+    },
+    /// Boot to the shell headless, drive it with a key script, screenshot
+    Shell {
+        #[command(flatten)]
+        head: HeadlessArgs,
+    },
+    /// Parse a program without running it
+    Check { program: String },
+    /// Print the API reference as Markdown
+    Docs,
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+struct HeadlessArgs {
+    /// Render offscreen without a window
+    #[arg(long)]
+    headless: bool,
+    /// Number of frames to run before exiting (headless)
+    #[arg(long, default_value_t = 60)]
+    frames: u32,
+    /// Write the final screen to this PNG (headless)
+    #[arg(long)]
+    screenshot: Option<PathBuf>,
+    /// Keystroke script, e.g. "help{enter}{wait:10}" (headless)
+    #[arg(long)]
+    keys: Option<String>,
+    /// Print the text layer to stdout at the end (headless)
+    #[arg(long)]
+    text: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -24,10 +66,83 @@ fn main() -> anyhow::Result<()> {
     let paths = Paths::detect(cli.portable, cli.disk.as_deref());
     let config = Config::load(&paths.config);
 
-    let console = make_console(paths, config)?;
-    app::run(console, None)
+    match cli.cmd {
+        None => {
+            let console = make_console(paths, config)?;
+            app::run(console, None)
+        }
+        Some(Cmd::Run { program, head }) => {
+            let console = make_console(paths, config)?;
+            if head.headless {
+                headless::run(console, &head, Some(&program))
+            } else {
+                app::run(console, Some(program))
+            }
+        }
+        Some(Cmd::Shell { head }) => {
+            let console = make_console(paths, config)?;
+            headless::run(console, &head, None)
+        }
+        Some(Cmd::Check { program }) => check(paths, &program),
+        Some(Cmd::Docs) => {
+            print!("{}", docs_markdown());
+            Ok(())
+        }
+    }
 }
 
 fn make_console(paths: Paths, config: Config) -> anyhow::Result<Console> {
     Console::new(ConsoleOptions { paths, config, demos: demos::all() }).map_err(|e| anyhow::anyhow!(e))
+}
+
+fn check(paths: Paths, program: &str) -> anyhow::Result<()> {
+    use argon_core::vfs::{resolve_program, Jail};
+    paths.ensure_dirs()?;
+    argon_shell::console::install_demos(&paths, &demos::all());
+    let disk = Jail::new(paths.disk.clone());
+    let loc = resolve_program(&disk, "", program).ok_or_else(|| anyhow::anyhow!("program not found: {program}"))?;
+    let src = disk.read_string(&loc.main)?;
+    let lua = mlua_check(&src, &loc.main);
+    match lua {
+        Ok(()) => {
+            println!("{}: OK", loc.main);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn mlua_check(src: &str, name: &str) -> Result<(), String> {
+    use argon_core::vfs::Jail;
+    use argon_lua::machine::{MachineOptions, NoFlip};
+    use argon_lua::runtime::Runtime;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    let tmp = std::env::temp_dir();
+    let rt = Runtime::new(MachineOptions::default(), Jail::new(tmp), None, Arc::new(AtomicBool::new(false)), Box::new(NoFlip))
+        .map_err(|e| e.to_string())?;
+    rt.lua.load(src).set_name(format!("={name}")).into_function().map(|_| ()).map_err(|e| {
+        let err = argon_lua::ArgonError::from_lua(&e, &rt.api, |_, l| src.lines().nth(l as usize - 1).map(|s| s.to_string()));
+        err.render()
+    })
+}
+
+fn docs_markdown() -> String {
+    use argon_core::api::Category;
+    let api = argon_lua::docs::api_table();
+    let mut out = String::from("# Argon API (api = 1)\n\n");
+    for cat in Category::ALL {
+        let entries: Vec<_> = api.in_category(cat).collect();
+        if entries.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("## {}\n\n", cat.name()));
+        for e in entries {
+            out.push_str(&format!("### `{}`\n\n{}\n\n```lua\n{}\n```\n\n", e.signature, e.doc, e.example));
+        }
+    }
+    out
 }

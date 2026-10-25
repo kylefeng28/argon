@@ -94,7 +94,7 @@ impl Console {
         let disk = Jail::new(paths.disk.clone()).with_read_only(&["DEMOS"]);
         let imm = new_immediate(&disk)?;
 
-        let theme = Theme::default_theme();
+        let theme = Theme::by_name(&config.theme).unwrap_or_else(Theme::default_theme);
         let history = std::fs::read_to_string(&paths.history)
             .map(|s| s.lines().map(|l| l.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
@@ -134,8 +134,22 @@ impl Console {
         self.quit
     }
 
+    pub fn theme(&self) -> &'static Theme {
+        self.theme
+    }
+
     pub fn is_running(&self) -> bool {
         self.mode == Mode::Running
+    }
+
+    /// Execute a shell line as if typed (used by `argon run`).
+    pub fn execute_line(&mut self, line: &str) {
+        if self.mode != Mode::Shell {
+            return;
+        }
+        let prompt = self.prompt_text();
+        self.grid.println(&format!("{prompt}{line}"));
+        self.execute(line);
     }
 
     /// Current shell screen text (for tests and the headless runner).
@@ -348,6 +362,8 @@ impl Console {
             }
             ShellCmd::Exit => self.quit = true,
 
+            ShellCmd::Theme(name) => self.cmd_theme(name),
+
             ShellCmd::Cd(dir) => self.cmd_cd(dir),
             ShellCmd::Dir(pat) => self.cmd_dir(pat.as_deref()),
             ShellCmd::Type(name) => self.cmd_type(name),
@@ -365,6 +381,9 @@ impl Console {
             ShellCmd::Copy(a, b) => self.cmd_copy(a, b),
             ShellCmd::Ren(a, b) => self.cmd_ren(a, b),
             ShellCmd::Del(name) => self.cmd_del(name),
+
+            ShellCmd::Export(name) => self.cmd_export(name),
+            ShellCmd::Import(path) => self.cmd_import(path),
         }
     }
 
@@ -383,6 +402,26 @@ impl Console {
     fn cls(&mut self) {
         self.grid.clear();
         self.cmds.push(DrawCmd::Clear(self.theme.bg));
+    }
+
+    fn cmd_theme(&mut self, name: Option<String>) {
+        match name {
+            None => {
+                let names: Vec<String> = Theme::names().map(|n| if n == self.theme.name { format!("{n} (current)") } else { n.to_string() }).collect();
+                self.print(&format!("Themes: {}", names.join(", ")));
+            }
+            Some(n) => match Theme::by_name(&n) {
+                Some(t) => {
+                    self.theme = t;
+                    self.config.theme = t.name.to_string();
+                    let _ = self.config.save(&self.paths.config);
+                    self.grid.fg = t.fg;
+                    self.cls();
+                    self.print(&format!("Theme: {}", t.name));
+                }
+                None => self.print_error(&format!("Unknown theme '{n}'. Try: {}", Theme::names().collect::<Vec<_>>().join(", "))),
+            },
+        }
     }
 
     fn eval_lua(&mut self, src: &str) {
@@ -740,6 +779,61 @@ impl Console {
         self.cmds.push(DrawCmd::Clear(self.theme.bg));
     }
 
+    fn cmd_export(&mut self, name: Option<String>) {
+        let Some(name) = name else {
+            self.print_error("Usage: EXPORT name");
+            return;
+        };
+        let Some(loc) = self.resolve(&name) else {
+            self.print_error(&format!("Program not found: {name}"));
+            return;
+        };
+        let src = if loc.is_cart { loc.dir.clone() } else { loc.main.clone() };
+        let host_src = match self.disk.resolve(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                self.print_error(&e.to_string());
+                return;
+            }
+        };
+        let dest = self.paths.export.join(host_src.file_name().unwrap_or_default());
+        let result = if host_src.is_dir() { copy_dir_host(&host_src, &dest) } else { std::fs::copy(&host_src, &dest).map(|_| ()) };
+        match result {
+            Ok(()) => self.print(&format!("Exported to {}", dest.display())),
+            Err(e) => self.print_error(&format!("Export failed: {e}")),
+        }
+    }
+
+    fn cmd_import(&mut self, path: Option<String>) {
+        let Some(path) = path else {
+            self.print_error("Usage: IMPORT host-path   (a .lua file or a program folder)");
+            return;
+        };
+        let host = std::path::PathBuf::from(shellexpand_home(&path));
+        if !host.exists() {
+            self.print_error(&format!("Not found on this computer: {}", host.display()));
+            return;
+        }
+        let name = host.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let dest_v = vfs::join(&self.cwd, &name);
+        let dest = match self.disk.resolve(&dest_v) {
+            Ok(p) => p,
+            Err(e) => {
+                self.print_error(&e.to_string());
+                return;
+            }
+        };
+        if dest.exists() {
+            self.print_error(&format!("{name} already exists here."));
+            return;
+        }
+        let result = if host.is_dir() { copy_dir_host(&host, &dest) } else { std::fs::copy(&host, &dest).map(|_| ()) };
+        match result {
+            Ok(()) => self.print(&format!("Imported {name}.")),
+            Err(e) => self.print_error(&format!("Import failed: {e}")),
+        }
+    }
+
     // ----- frame -----------------------------------------------------------------------------
 
     /// Advance one display frame. `dt` is the display frame time.
@@ -968,6 +1062,15 @@ fn copy_dir_host(from: &std::path::Path, to: &std::path::Path) -> std::io::Resul
     Ok(())
 }
 
+fn shellexpand_home(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}/{rest}", home.to_string_lossy());
+        }
+    }
+    p.to_string()
+}
+
 fn common_prefix(items: &[String]) -> String {
     let Some(first) = items.first() else { return String::new() };
     let mut prefix: Vec<char> = first.chars().collect();
@@ -1069,6 +1172,33 @@ mod tests {
         pump(&mut c, 30);
         assert!(!c.is_running());
         assert!(c.screen_text().contains("Break"));
+    }
+
+
+    #[test]
+    fn new_opens_editor_and_f5_runs_then_error_jumps() {
+        let (mut c, _d) = console();
+        type_line(&mut c, "new game");
+        assert_eq!(c.mode, Mode::Editor);
+        // Replace content with a broken program.
+        c.key(KeyEvent::press(KeyCode::A).with_ctrl());
+        for ch in "print(1)\nnope()".chars() {
+            if ch == '\n' {
+                c.key(KeyEvent::press(KeyCode::Enter));
+            } else {
+                c.key(KeyEvent::typed(ch));
+            }
+        }
+        c.key(KeyEvent::press(KeyCode::F5));
+        assert!(c.is_running());
+        pump(&mut c, 50);
+        assert_eq!(c.mode, Mode::Editor);
+        let ed = c.editor.as_ref().unwrap();
+        assert_eq!(ed.cursor().line, 1, "cursor should jump to the error line");
+        assert!(c.disk.read_string("game.lua").unwrap().contains("nope()"));
+        // Esc leaves the editor (no unsaved changes).
+        c.key(KeyEvent::press(KeyCode::Escape));
+        assert_eq!(c.mode, Mode::Shell);
     }
 
     /*

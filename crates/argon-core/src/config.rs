@@ -1,4 +1,5 @@
-//! User configuration (`~/.argon/config.toml`)
+//! User configuration (`~/.argon/config.toml`) and cart manifests
+//! (`cart.toml`).
 
 use crate::input::KeyMap;
 use serde::{Deserialize, Serialize};
@@ -7,10 +8,11 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub theme: String,
     /// Window scale factor at startup (integer multiple of the virtual
     /// resolution); 0 = fit screen.
-    // pub window_scale: u32,
-    // pub fullscreen: bool,
+    pub window_scale: u32,
+    pub fullscreen: bool,
     /// Override of the disk location.
     pub disk: Option<PathBuf>,
     pub keymap: KeyMap,
@@ -20,8 +22,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            // window_scale: 0,
-            // fullscreen: false,
+            theme: "amber".to_string(),
+            window_scale: 0,
+            fullscreen: false,
             disk: None,
             keymap: KeyMap::default(),
             editor: EditorConfig::default(),

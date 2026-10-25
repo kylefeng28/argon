@@ -3,10 +3,10 @@
 
 use crate::error::BREAK_MARKER;
 use crate::machine::{FlipError, Machine};
-use argon_core::draw::DrawCmd;
+use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
 use argon_core::input::{KeyCode, PadButton};
 use argon_core::{Color, CELL_H, CELL_W};
-use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value};
+use mlua::{FromLua, Lua, LuaSerdeExt, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -48,6 +48,85 @@ fn col(m: &Machine, v: Option<f64>) -> Color {
 
 fn color_num(c: Color) -> f64 {
     c.to_u32() as f64
+}
+
+/// Image handle exposed to Lua.
+#[derive(Clone, Copy)]
+#[allow(clippy::too_many_arguments)]
+pub struct LuaImage {
+    pub id: ImageId,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl UserData for LuaImage {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("width", |_, i| Ok(i.w));
+        fields.add_field_method_get("height", |_, i| Ok(i.h));
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method("__tostring", |_, i, ()| Ok(format!("image({}x{})", i.w, i.h)));
+    }
+}
+
+impl FromLua for LuaImage {
+    fn from_lua(v: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match &v {
+            Value::UserData(ud) => Ok(*ud.borrow::<LuaImage>()?),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "image".to_string(),
+                message: Some("expected an image from load_image or new_image".to_string()),
+            }),
+        }
+    }
+}
+
+fn sprite_opts(opts: Option<Table>) -> mlua::Result<SpriteOpts> {
+    let mut o = SpriteOpts::default();
+    let Some(t) = opts else { return Ok(o) };
+    if let Some(s) = t.get::<Option<f32>>("scale")? {
+        o.scale_x = s;
+        o.scale_y = s;
+    }
+    if let Some(s) = t.get::<Option<f32>>("scale_x")? {
+        o.scale_x = s;
+    }
+    if let Some(s) = t.get::<Option<f32>>("scale_y")? {
+        o.scale_y = s;
+    }
+    if let Some(r) = t.get::<Option<f32>>("rotation")? {
+        o.rotation = r;
+    }
+    o.flip_x = t.get::<Option<bool>>("flip_x")?.unwrap_or(false);
+    o.flip_y = t.get::<Option<bool>>("flip_y")?.unwrap_or(false);
+    if let Some(tint) = t.get::<Option<f64>>("tint")? {
+        o.tint = Color::from_u32(tint.max(0.0) as u32);
+    }
+    if let Some(a) = t.get::<Option<f32>>("alpha")? {
+        o.tint.a = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    if let Some(v) = t.get::<Option<f32>>("origin_x")? {
+        o.origin_x = v;
+    }
+    if let Some(v) = t.get::<Option<f32>>("origin_y")? {
+        o.origin_y = v;
+    }
+    Ok(o)
+}
+
+fn points_from_table(t: &Table) -> mlua::Result<Vec<[f32; 2]>> {
+    let n = t.raw_len();
+    let mut pts = Vec::with_capacity(n / 2);
+    let mut i = 1;
+    while i < n {
+        let x: f64 = t.raw_get(i)?;
+        let y: f64 = t.raw_get(i + 1)?;
+        pts.push([x as f32, y as f32]);
+        i += 2;
+    }
+    Ok(pts)
 }
 
 fn values_to_string(vals: &MultiValue) -> mlua::Result<String> {
@@ -345,6 +424,48 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
         mm.cmds.push(DrawCmd::Rect { x: px(x), y: px(y), w: px(w), h: px(h), color, fill: true });
         Ok(())
     });
+    def!("circle", |mm, x: f64, y: f64, r: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Circle { x: px(x), y: px(y), r: px(r), color, fill: false });
+        Ok(())
+    });
+    def!("fill_circle", |mm, x: f64, y: f64, r: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Circle { x: px(x), y: px(y), r: px(r), color, fill: true });
+        Ok(())
+    });
+    def!("ellipse", |mm, x: f64, y: f64, rx: f64, ry: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Ellipse { x: px(x), y: px(y), rx: px(rx), ry: px(ry), color, fill: false });
+        Ok(())
+    });
+    def!("fill_ellipse", |mm, x: f64, y: f64, rx: f64, ry: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Ellipse { x: px(x), y: px(y), rx: px(rx), ry: px(ry), color, fill: true });
+        Ok(())
+    });
+    def!("triangle", |mm, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Triangle { pts: [[x1 as f32, y1 as f32], [x2 as f32, y2 as f32], [x3 as f32, y3 as f32]], color, fill: false });
+        Ok(())
+    });
+    def!("fill_triangle", |mm, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64, c: Option<f64>| {
+        let color = col(&mm, c);
+        mm.cmds.push(DrawCmd::Triangle { pts: [[x1 as f32, y1 as f32], [x2 as f32, y2 as f32], [x3 as f32, y3 as f32]], color, fill: true });
+        Ok(())
+    });
+    def!("polygon", |mm, pts: Table, c: Option<f64>| {
+        let color = col(&mm, c);
+        let pts = points_from_table(&pts)?;
+        mm.cmds.push(DrawCmd::Polygon { pts, color, fill: false });
+        Ok(())
+    });
+    def!("fill_polygon", |mm, pts: Table, c: Option<f64>| {
+        let color = col(&mm, c);
+        let pts = points_from_table(&pts)?;
+        mm.cmds.push(DrawCmd::Polygon { pts, color, fill: true });
+        Ok(())
+    });
     def!("draw_text", |mm, x: f64, y: f64, text: MultiValue| {
         // text may be followed by color and scale
         let mut it = text.into_iter();
@@ -364,8 +485,91 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
         mm.cmds.push(DrawCmd::Text { x: px(x), y: px(y), text: s, color, scale });
         Ok(())
     });
+    def!("clip", |mm, x: Option<f64>, y: Option<f64>, w: Option<f64>, h: Option<f64>| {
+        let r = match (x, y, w, h) {
+            (Some(x), Some(y), Some(w), Some(h)) => Some(Rect::new(x as f32, y as f32, w as f32, h as f32)),
+            _ => None,
+        };
+        mm.cmds.push(DrawCmd::SetClip(r));
+        Ok(())
+    });
+    def!("camera", |mm, dx: Option<f64>, dy: Option<f64>| {
+        mm.cmds.push(DrawCmd::SetCamera { dx: dx.unwrap_or(0.0) as f32, dy: dy.unwrap_or(0.0) as f32 });
+        Ok(())
+    });
+    def!("blend", |mm, mode: String| {
+        let b = BlendMode::parse(&mode).ok_or_else(|| rt(format!("unknown blend mode '{mode}'; use alpha, add, multiply or replace")))?;
+        mm.cmds.push(DrawCmd::SetBlend(b));
+        Ok(())
+    });
+
+    // ---- Image ----
+    def!("load_image", |mm, path: String| {
+        let bytes = mm.jail.read(&path).map_err(|e| rt(format!("load_image: {e}")))?;
+        let img = image::load_from_memory(&bytes).map_err(|e| rt(format!("load_image: {path}: {e}")))?.to_rgba8();
+        let (w, h) = img.dimensions();
+        let id = mm.alloc_image(w, h);
+        mm.cmds.push(DrawCmd::CreateImage { id, width: w, height: h, pixels: img.into_raw() });
+        Ok(LuaImage { id, w, h })
+    });
+    def!("new_image", |mm, w: f64, h: f64, c: Option<f64>| {
+        let (w, h) = (px(w).clamp(1, 8192) as u32, px(h).clamp(1, 8192) as u32);
+        let color = c.map(|v| Color::from_u32(v.max(0.0) as u32)).unwrap_or(Color::TRANSPARENT);
+        let id = mm.alloc_image(w, h);
+        let pixels = color.to_bytes().repeat((w * h) as usize);
+        mm.cmds.push(DrawCmd::CreateImage { id, width: w, height: h, pixels });
+        Ok(LuaImage { id, w, h })
+    });
+    def!("image_size", |_mm, img: LuaImage| { Ok((img.w, img.h)) });
+    def!("draw_image", |mm, img: LuaImage, x: f64, y: f64, opts: Option<Table>| {
+        let opts = sprite_opts(opts)?;
+        mm.cmds.push(DrawCmd::Sprite { image: img.id, src: Rect::new(0.0, 0.0, img.w as f32, img.h as f32), x: x as f32, y: y as f32, opts });
+        Ok(())
+    });
+    def!("draw_sprite", |mm, img: LuaImage, sx: f64, sy: f64, sw: f64, sh: f64, x: f64, y: f64, opts: Option<Table>| {
+        let opts = sprite_opts(opts)?;
+        mm.cmds.push(DrawCmd::Sprite { image: img.id, src: Rect::new(sx as f32, sy as f32, sw as f32, sh as f32), x: x as f32, y: y as f32, opts });
+        Ok(())
+    });
+    def!("draw_image_quad", |mm, img: LuaImage, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64, x4: f64, y4: f64| {
+        mm.cmds.push(DrawCmd::ImageQuad {
+            image: img.id,
+            pts: [[x1 as f32, y1 as f32], [x2 as f32, y2 as f32], [x3 as f32, y3 as f32], [x4 as f32, y4 as f32]],
+            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            tint: Color::WHITE,
+        });
+        Ok(())
+    });
+    def!("set_target", |mm, img: Option<LuaImage>| {
+        mm.cmds.push(DrawCmd::SetTarget(img.map(|i| i.id)));
+        Ok(())
+    });
 
     // ---- File ----
+    def!("read_file", |mm, path: String| {
+        match mm.jail.read_string(&path) {
+            Ok(s) => Ok((Some(s), None::<String>)),
+            Err(e) => Ok((None, Some(e.to_string()))),
+        }
+    });
+    def!("write_file", |mm, path: String, text: String| {
+        mm.jail.write(&path, text.as_bytes()).map_err(|e| rt(format!("write_file: {e}")))
+    });
+    def!("append_file", |mm, path: String, text: String| {
+        mm.jail.append(&path, text.as_bytes()).map_err(|e| rt(format!("append_file: {e}")))
+    });
+    def!("file_exists", |mm, path: String| { Ok(mm.jail.exists(&path)) });
+    def!("delete_file", |mm, path: String| {
+        mm.jail.delete(&path).map_err(|e| rt(format!("delete_file: {e}")))
+    });
+    def!("list_files", lua |lua, mm, dir: Option<String>| {
+        let entries = mm.jail.list(dir.as_deref().unwrap_or("")).map_err(|e| rt(format!("list_files: {e}")))?;
+        let t = lua.create_table()?;
+        for (i, e) in entries.iter().enumerate() {
+            t.set(i + 1, e.name.clone())?;
+        }
+        Ok(t)
+    });
     def!("save", lua |lua, mm, key: String, value: Value| {
         let json: serde_json::Value = lua.from_value(value)?;
         let mut store = read_store(&mm);

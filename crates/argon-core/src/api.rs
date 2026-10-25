@@ -151,6 +151,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn suggest_typo() {
+        let mut t = ApiTable::new();
+        t.add(ApiEntry { name: "fill_rect", category: Category::Draw, signature: "", doc: "", example: "", snippet: "" });
+        t.add(ApiEntry { name: "fill_circle", category: Category::Draw, signature: "", doc: "", example: "", snippet: "" });
+        assert_eq!(t.suggest("fil_rect"), Some("fill_rect"));
+        assert_eq!(t.suggest("banana"), None);
+    }
+
+    #[test]
     fn snippet_placeholders() {
         let (s, r) = expand_snippet("fill_rect(${x}, ${y}, ${w}, ${h})");
         assert_eq!(s, "fill_rect(x, y, w, h)");

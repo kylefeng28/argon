@@ -1,8 +1,6 @@
 /target
-
-
-# Added by cargo
-#
-# already existing elements were commented out
-
-#/target
+/tools/node_modules
+/tools/out
+*.png
+!assets/**/*.png
+!disk/**/*.png

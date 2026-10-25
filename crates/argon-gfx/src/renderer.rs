@@ -1,5 +1,5 @@
 use crate::atlas::Atlas;
-use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect};
+use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
 use argon_core::raster::{self, Span};
 use argon_core::{Color, Font, TextGrid, CELL_H, CELL_W};
 use std::collections::HashMap;
@@ -75,7 +75,7 @@ struct TexBundle {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum TexKey {
     Atlas,
-    // Image(ImageId),
+    Image(ImageId),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -410,7 +410,31 @@ impl Renderer {
 
     fn record(&mut self, cmd: &DrawCmd) {
         match cmd {
+            DrawCmd::SetClip(c) => self.state.clip = *c,
+            DrawCmd::SetCamera { dx, dy } => self.state.camera = (*dx, *dy),
+            DrawCmd::SetBlend(b) => self.state.blend = *b,
+            DrawCmd::SetTarget(t) => {
+                self.state.target = t.filter(|id| self.images.contains_key(id));
+            }
             DrawCmd::SetLineWidth(w) => self.state.line_width = (*w).max(1),
+            DrawCmd::CreateImage { id, width, height, pixels } => {
+                let tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, *width, *height, Some("image"));
+                if pixels.len() == (*width as usize) * (*height as usize) * 4 {
+                    self.gpu.queue.write_texture(
+                        tex.texture.as_image_copy(),
+                        pixels,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: None },
+                        wgpu::Extent3d { width: *width, height: *height, depth_or_array_layers: 1 },
+                    );
+                }
+                self.images.insert(*id, tex);
+            }
+            DrawCmd::DestroyImage(id) => {
+                self.images.remove(id);
+                if self.state.target == Some(*id) {
+                    self.state.target = None;
+                }
+            }
             DrawCmd::Clear(color) => {
                 let (tw, th) = self.target_size();
                 let saved = self.state.blend;
@@ -448,6 +472,30 @@ impl Renderer {
                 }
                 self.emit_spans(*color);
             }
+            DrawCmd::Circle { x, y, r, color, fill } => {
+                raster::ellipse(*x, *y, *r, *r, *fill, &mut self.spans);
+                self.emit_spans(*color);
+            }
+            DrawCmd::Ellipse { x, y, rx, ry, color, fill } => {
+                raster::ellipse(*x, *y, *rx, *ry, *fill, &mut self.spans);
+                self.emit_spans(*color);
+            }
+            DrawCmd::Triangle { pts, color, fill } => {
+                if *fill {
+                    raster::fill_polygon(pts, &mut self.spans);
+                } else {
+                    raster::polygon_outline(pts, &mut self.spans);
+                }
+                self.emit_spans(*color);
+            }
+            DrawCmd::Polygon { pts, color, fill } => {
+                if *fill {
+                    raster::fill_polygon(pts, &mut self.spans);
+                } else {
+                    raster::polygon_outline(pts, &mut self.spans);
+                }
+                self.emit_spans(*color);
+            }
             DrawCmd::Text { x, y, text, color, scale } => {
                 let (tw, th) = self.target_size();
                 let scale = (*scale).max(1) as f32;
@@ -464,6 +512,34 @@ impl Renderer {
                     self.glyph_quad(ch, px, py, scale, *color, tw, th);
                     px += CELL_W as f32 * scale;
                 }
+                self.end_batch();
+            }
+            DrawCmd::Sprite { image, src, x, y, opts } => {
+                let Some(img) = self.images.get(image) else { return };
+                let (iw, ih) = (img.w as f32, img.h as f32);
+                let (tw, th) = self.target_size();
+                let (cx, cy) = self.state.camera;
+                let corners = sprite_corners(*x + cx, *y + cy, src.w, src.h, opts);
+                let (mut u0, mut v0, mut u1, mut v1) = (src.x / iw, src.y / ih, (src.x + src.w) / iw, (src.y + src.h) / ih);
+                if opts.flip_x {
+                    std::mem::swap(&mut u0, &mut u1);
+                }
+                if opts.flip_y {
+                    std::mem::swap(&mut v0, &mut v1);
+                }
+                self.begin_batch(TexKey::Image(*image));
+                self.quad_px(corners, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], opts.tint, tw, th);
+                self.end_batch();
+            }
+            DrawCmd::ImageQuad { image, pts, uvs, tint } => {
+                if !self.images.contains_key(image) {
+                    return;
+                }
+                let (tw, th) = self.target_size();
+                let (cx, cy) = self.state.camera;
+                let pts = pts.map(|p| [p[0] + cx, p[1] + cy]);
+                self.begin_batch(TexKey::Image(*image));
+                self.quad_px(pts, *uvs, *tint, tw, th);
                 self.end_batch();
             }
         }
@@ -632,7 +708,7 @@ impl Renderer {
     fn bind_group(&self, key: TexKey) -> Option<&wgpu::BindGroup> {
         match key {
             TexKey::Atlas => Some(&self.atlas_tex.bind_group),
-            //TexKey::Image(id) => self.images.get(&id).map(|t| &t.bind_group),
+            TexKey::Image(id) => self.images.get(&id).map(|t| &t.bind_group),
         }
     }
 
@@ -740,6 +816,21 @@ fn clip_to_scissor(clip: Option<Rect>, (tw, th): (u32, u32)) -> (u32, u32, u32, 
             (x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
         }
     }
+}
+
+fn sprite_corners(x: f32, y: f32, w: f32, h: f32, o: &SpriteOpts) -> [[f32; 2]; 4] {
+    let (sw, sh) = (w * o.scale_x, h * o.scale_y);
+    let (ox, oy) = (o.origin_x * o.scale_x, o.origin_y * o.scale_y);
+    // Corners relative to the pivot.
+    let rel = [[-ox, -oy], [sw - ox, -oy], [sw - ox, sh - oy], [-ox, sh - oy]];
+    let (s, c) = o.rotation.sin_cos();
+    rel.map(|[px, py]| {
+        if o.rotation == 0.0 {
+            [x + px, y + py]
+        } else {
+            [x + px * c - py * s, y + px * s + py * c]
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

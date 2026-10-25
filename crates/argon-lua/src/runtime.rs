@@ -260,14 +260,14 @@ mod tests {
     }
 
     #[test]
-    fn errors_carry_line() {
+    fn errors_carry_line_and_hint() {
         let (mut r, _d, _) = rt(false);
         let out = r.run_main("main.lua", "local a = 1\nfil_rect(1, 2, 3, 4)\n");
         match out {
             Outcome::Error(e) => {
                 assert_eq!(e.file.as_deref(), Some("main.lua"));
                 assert_eq!(e.line, Some(2));
-                // assert_eq!(e.hint.as_deref(), Some("Did you mean fill_rect?"), "{:?}", e.message);
+                assert_eq!(e.hint.as_deref(), Some("Did you mean fill_rect?"), "{:?}", e.message);
                 assert_eq!(e.source_line.as_deref(), Some("fil_rect(1, 2, 3, 4)"));
             }
             other => panic!("{other:?}"),

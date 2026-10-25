@@ -14,6 +14,8 @@ pub enum ShellCmd {
     Ver,
     Exit,
 
+    Theme(Option<String>),
+
     Cd(Option<String>),
     Dir(Option<String>),
     Type(Option<String>),
@@ -27,6 +29,9 @@ pub enum ShellCmd {
     Copy(Option<String>, Option<String>),
     Ren(Option<String>, Option<String>),
     Del(Option<String>),
+
+    Export(Option<String>),
+    Import(Option<String>),
 }
 
 /// Parse a line. Commands are case-insensitive.
@@ -58,6 +63,8 @@ pub fn parse(line: &str) -> ShellCmd {
         "VER" | "VERSION" => ShellCmd::Ver,
         "EXIT" => ShellCmd::Exit,
 
+        "THEME" => ShellCmd::Theme(one()),
+
         "CD" => ShellCmd::Cd(one()),
         "DIR" | "LS" => ShellCmd::Dir(one()),
         "TYPE" | "CAT" => ShellCmd::Type(one()),
@@ -77,6 +84,9 @@ pub fn parse(line: &str) -> ShellCmd {
             ShellCmd::Ren(a, b)
         }
         "DEL" | "RM" | "DELETE" => ShellCmd::Del(one()),
+
+        "EXPORT" => ShellCmd::Export(one()),
+        "IMPORT" => ShellCmd::Import(one()),
 
         _ => ShellCmd::Unknown(word.to_string()),
     }
