@@ -1,4 +1,5 @@
 -- plot: graph a function, like the TI-84 graph screen.
+alt_screen()
 local w, h = screen_size()
 local xmin, xmax, ymin, ymax = -10, 10, -5, 5
 

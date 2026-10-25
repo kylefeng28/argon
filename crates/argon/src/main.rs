@@ -38,7 +38,11 @@ enum Cmd {
     /// Parse a program without running it
     Check { program: String },
     /// Print the API reference as Markdown
-    Docs,
+    Docs {
+        /// One line per function (for prompts and quick reference)
+        #[arg(long)]
+        compact: bool,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -68,11 +72,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.cmd {
         None => {
-            let console = make_console(paths, config)?;
+            let console = make_console(paths, config, true)?;
             app::run(console, None)
         }
         Some(Cmd::Run { program, head }) => {
-            let console = make_console(paths, config)?;
+            let console = make_console(paths, config, !head.headless)?;
             if head.headless {
                 headless::run(console, &head, Some(&program))
             } else {
@@ -80,19 +84,19 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Cmd::Shell { head }) => {
-            let console = make_console(paths, config)?;
+            let console = make_console(paths, config, false)?;
             headless::run(console, &head, None)
         }
         Some(Cmd::Check { program }) => check(paths, &program),
-        Some(Cmd::Docs) => {
-            print!("{}", docs_markdown());
+        Some(Cmd::Docs { compact }) => {
+            print!("{}", if compact { docs_compact() } else { docs_markdown() });
             Ok(())
         }
     }
 }
 
-fn make_console(paths: Paths, config: Config) -> anyhow::Result<Console> {
-    Console::new(ConsoleOptions { paths, config, demos: demos::all() }).map_err(|e| anyhow::anyhow!(e))
+fn make_console(paths: Paths, config: Config, audio: bool) -> anyhow::Result<Console> {
+    Console::new(ConsoleOptions { paths, config, demos: demos::all(), audio }).map_err(|e| anyhow::anyhow!(e))
 }
 
 fn check(paths: Paths, program: &str) -> anyhow::Result<()> {
@@ -128,6 +132,24 @@ fn mlua_check(src: &str, name: &str) -> Result<(), String> {
         let err = argon_lua::ArgonError::from_lua(&e, &rt.api, |_, l| src.lines().nth(l as usize - 1).map(|s| s.to_string()));
         err.render()
     })
+}
+
+fn docs_compact() -> String {
+    use argon_core::api::Category;
+    let api = argon_lua::docs::api_table();
+    let mut out = String::new();
+    for cat in Category::ALL {
+        let entries: Vec<_> = api.in_category(cat).collect();
+        if entries.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("## {}\n", cat.name()));
+        for e in entries {
+            out.push_str(&format!("{}  -- {}\n", e.signature, e.doc));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn docs_markdown() -> String {

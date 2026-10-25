@@ -1,4 +1,5 @@
 -- sprites: build a sprite sheet with set_target, then draw rotated sprites.
+alt_screen()
 local w, h = screen_size()
 
 -- Draw four 32x32 sprites into an image instead of loading a PNG.

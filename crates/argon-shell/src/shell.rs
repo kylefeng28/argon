@@ -84,7 +84,6 @@ pub fn parse(line: &str) -> ShellCmd {
             ShellCmd::Ren(a, b)
         }
         "DEL" | "RM" | "DELETE" => ShellCmd::Del(one()),
-
         "EXPORT" => ShellCmd::Export(one()),
         "IMPORT" => ShellCmd::Import(one()),
 

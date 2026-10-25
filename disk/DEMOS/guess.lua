@@ -18,11 +18,14 @@ while true do
     if g == n then
       text_color(rgb(169, 139, 255))
       print("  Yes! It was " .. n .. ". You took " .. tries .. " tries.")
+      beep(880, 0.15)
       break
     elseif g < n then
       print("  Higher.")
+      beep(440, 0.05)
     else
       print("  Lower.")
+      beep(330, 0.05)
     end
   end
 end

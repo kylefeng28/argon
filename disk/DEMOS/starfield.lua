@@ -1,4 +1,5 @@
 -- starfield: the demo every machine gets first.
+alt_screen()
 local w, h = screen_size()
 local stars = {}
 for i = 1, 400 do

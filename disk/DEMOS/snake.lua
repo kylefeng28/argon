@@ -1,5 +1,6 @@
 -- snake: a game on the text grid using put_char. Arrows move, Esc quits.
 -- argon: fps = 12
+alt_screen()
 local cols, rows = text_size()
 local snake = { { x = 10, y = 10 }, { x = 9, y = 10 }, { x = 8, y = 10 } }
 local dir = { x = 1, y = 0 }

@@ -36,6 +36,10 @@ A user should be able to:
 | D10 | Audience priority | Power features and speed first. Error messages must still be easy to read, and API names are explicit (`fill_circle`, not `circfill`). |
 | D11 | Multitasking | Strictly one program at a time. Esc returns to the shell. |
 | D12 | License | Open source. |
+| D13 | Lua engine | Luau (via mlua). |
+| D14 | Pad key mapping | Default: arrows, Z=a, X=b, A=x, S=y, Q=l, W=r, Enter=start, RShift=select. All bindings configurable in `~/.argon/config.toml`. |
+| D15 | Deletion | `DEL` requires confirmation. No trash folder. |
+| D16 | Immediate mode state | The shell's Lua state persists across `RUN`s. |
 
 ## 3. Personas
 
@@ -86,6 +90,7 @@ P2 = later phase.
 | FR-C7 | P0 | Fullscreen toggle and window scaling without affecting the cart's virtual resolution. |
 | FR-C8 | P0 | The console never shows a mouse cursor. |
 | FR-C9 | P0 | User-selectable UI theme for shell and editor (at least: green phosphor, amber, blue, gray LCD) persisted across launches. |
+| FR-C10 | P0 | Alternate screen: `alt_screen()` switches a program to a fresh framebuffer and text layer; the shell's screen (pixels and text) is restored when the program ends or calls `main_screen()`. Programs that do not call it leave their output on the shell screen, DOS-style. |
 
 ### 5.2 Shell
 

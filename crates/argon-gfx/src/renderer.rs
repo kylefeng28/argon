@@ -76,6 +76,16 @@ struct TexBundle {
 enum TexKey {
     Atlas,
     Image(ImageId),
+    /// Not a draw: copy framebuffer -> saved buffer (alt screen).
+    SaveScreen,
+    /// Not a draw: copy saved buffer -> framebuffer.
+    RestoreScreen,
+}
+
+impl TexKey {
+    fn is_marker(self) -> bool {
+        matches!(self, TexKey::SaveScreen | TexKey::RestoreScreen)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -123,6 +133,8 @@ pub struct Renderer {
     atlas_tex: TexBundle,
     framebuffer: TexBundle,
     composite: TexBundle,
+    /// Copy of the framebuffer taken by `SaveScreen`.
+    saved_screen: Option<TexBundle>,
     images: HashMap<ImageId, TexBundle>,
     vbuf: wgpu::Buffer,
     verts: Vec<Vertex>,
@@ -206,6 +218,7 @@ impl Renderer {
             atlas_tex,
             framebuffer,
             composite,
+            saved_screen: None,
             images: HashMap::new(),
             vbuf,
             verts: Vec::new(),
@@ -341,7 +354,7 @@ impl Renderer {
             if last.tex == tex && last.blend == st.blend && last.target == st.target && last.clip == st.clip {
                 return;
             }
-            if last.start == last.end {
+            if last.start == last.end && !last.tex.is_marker() {
                 // Empty batch: just retarget it.
                 *last = Batch { target: st.target, blend: st.blend, clip: st.clip, tex, start, end: start };
                 return;
@@ -417,6 +430,11 @@ impl Renderer {
                 self.state.target = t.filter(|id| self.images.contains_key(id));
             }
             DrawCmd::SetLineWidth(w) => self.state.line_width = (*w).max(1),
+            DrawCmd::SaveScreen | DrawCmd::RestoreScreen => {
+                let tex = if matches!(cmd, DrawCmd::SaveScreen) { TexKey::SaveScreen } else { TexKey::RestoreScreen };
+                let start = self.verts.len() as u32;
+                self.batches.push(Batch { target: None, blend: self.state.blend, clip: None, tex, start, end: start });
+            }
             DrawCmd::CreateImage { id, width, height, pixels } => {
                 let tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, *width, *height, Some("image"));
                 if pixels.len() == (*width as usize) * (*height as usize) * 4 {
@@ -589,9 +607,14 @@ impl Renderer {
         // Program draws, grouped by target into passes.
         let mut i = 0;
         while i < program_batches.len() {
+            if program_batches[i].tex.is_marker() {
+                self.screen_copy(&mut enc, program_batches[i].tex == TexKey::SaveScreen);
+                i += 1;
+                continue;
+            }
             let target = program_batches[i].target;
             let mut j = i;
-            while j < program_batches.len() && program_batches[j].target == target {
+            while j < program_batches.len() && program_batches[j].target == target && !program_batches[j].tex.is_marker() {
                 j += 1;
             }
             // Pipelines must exist before we borrow views for the pass.
@@ -667,6 +690,24 @@ impl Renderer {
         self.gpu.queue.submit([enc.finish()]);
     }
 
+    /// Alt screen support: copy the framebuffer to the saved buffer or back.
+    fn screen_copy(&mut self, enc: &mut wgpu::CommandEncoder, save: bool) {
+        let (w, h) = (self.framebuffer.w, self.framebuffer.h);
+        if save && self.saved_screen.as_ref().map(|t| (t.w, t.h) != (w, h)).unwrap_or(true) {
+            self.saved_screen = Some(create_texture(&self.gpu.device, &self.bgl, &self.sampler, w, h, Some("saved-screen")));
+        }
+        let Some(saved) = &self.saved_screen else { return };
+        if (saved.w, saved.h) != (w, h) {
+            return;
+        }
+        let (src, dst) = if save { (&self.framebuffer, saved) } else { (saved, &self.framebuffer) };
+        enc.copy_texture_to_texture(
+            src.texture.as_image_copy(),
+            dst.texture.as_image_copy(),
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+    }
+
     fn text_layer_verts(&mut self, grid: &TextGrid, cursor_on: bool, tw: u32, th: u32) {
         let cols = grid.cols();
         for (i, cell) in grid.cells().iter().enumerate() {
@@ -709,6 +750,7 @@ impl Renderer {
         match key {
             TexKey::Atlas => Some(&self.atlas_tex.bind_group),
             TexKey::Image(id) => self.images.get(&id).map(|t| &t.bind_group),
+            TexKey::SaveScreen | TexKey::RestoreScreen => None,
         }
     }
 

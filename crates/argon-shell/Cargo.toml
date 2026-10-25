@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 argon-core = { workspace = true }
 argon-lua = { workspace = true }
+argon-audio = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]

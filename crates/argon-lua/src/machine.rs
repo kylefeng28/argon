@@ -1,5 +1,6 @@
 //! Per-program state shared by all API functions, and the frame protocol.
 
+use argon_audio::AudioCmd;
 use argon_core::draw::{DrawCmd, ImageId};
 use argon_core::input::KeyEvent;
 use argon_core::vfs::Jail;
@@ -17,6 +18,10 @@ pub struct FrameOut {
     /// Requested virtual resolution change, applied before drawing.
     pub resolution: Option<(u32, u32)>,
     pub fps: u32,
+    /// The program is drawing on the alternate screen (see `alt_screen()`).
+    pub alt_screen: bool,
+    /// Sound commands issued since the last flip.
+    pub audio: Vec<AudioCmd>,
 }
 
 /// What comes back after the frame was presented.
@@ -134,6 +139,12 @@ pub struct Machine {
     pub exit_requested: bool,
     /// Elapsed-time budget for immediate mode evaluation.
     pub deadline: Option<Instant>,
+    /// Alternate screen state: the saved text layer while on the alt screen.
+    pub alt_screen: bool,
+    pub saved_grid: Option<TextGrid>,
+    pub audio: Vec<AudioCmd>,
+    pub next_sound: u32,
+    pub next_voice: u32,
 }
 
 impl Machine {
@@ -164,6 +175,37 @@ impl Machine {
             main_name: opts.main_name,
             exit_requested: false,
             deadline: None,
+            alt_screen: false,
+            saved_grid: None,
+            audio: Vec::new(),
+            next_sound: 1,
+            next_voice: 1,
+        }
+    }
+
+    /// Switch to a fresh screen, remembering the current one.
+    pub fn enter_alt_screen(&mut self) {
+        if self.alt_screen {
+            return;
+        }
+        self.alt_screen = true;
+        self.cmds.push(DrawCmd::SaveScreen);
+        self.cmds.push(DrawCmd::Clear(Color::BLACK));
+        let mut fresh = TextGrid::new(self.grid.cols(), self.grid.rows());
+        fresh.fg = self.grid.fg;
+        fresh.bg = self.grid.bg;
+        self.saved_grid = Some(std::mem::replace(&mut self.grid, fresh));
+    }
+
+    /// Return to the screen saved by `enter_alt_screen`.
+    pub fn leave_alt_screen(&mut self) {
+        if !self.alt_screen {
+            return;
+        }
+        self.alt_screen = false;
+        self.cmds.push(DrawCmd::RestoreScreen);
+        if let Some(g) = self.saved_grid.take() {
+            self.grid = g;
         }
     }
 
@@ -181,6 +223,8 @@ impl Machine {
             grid: self.grid.clone(),
             resolution: self.pending_resolution.take(),
             fps: self.fps,
+            alt_screen: self.alt_screen,
+            audio: std::mem::take(&mut self.audio),
         };
         let ack = self.flip.flip(out)?;
         self.key_queue.extend(ack.input.typed.iter().cloned());

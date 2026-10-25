@@ -1,0 +1,11 @@
+[package]
+name = "argon-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cpal = "0.15"
+hound = "3"
+lewton = "0.10"
+log = { workspace = true }

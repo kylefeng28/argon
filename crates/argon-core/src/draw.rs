@@ -98,6 +98,10 @@ pub enum DrawCmd {
     /// Redirect drawing into an image (`None` = screen).
     SetTarget(Option<ImageId>),
     SetLineWidth(u32),
+    /// Copy the screen framebuffer into the saved buffer (alt screen).
+    SaveScreen,
+    /// Copy the saved buffer back onto the screen framebuffer.
+    RestoreScreen,
 }
 
 /// Everything the renderer needs for one frame.

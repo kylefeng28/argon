@@ -1,5 +1,6 @@
 -- retro: a low resolution cart with a scrolling camera.
 -- argon: resolution = "retro"
+alt_screen()
 local w, h = screen_size()
 local tiles = {}
 for i = 1, 200 do tiles[i] = { x = i * 24, y = h - 40 - (i % 7) * 10 } end

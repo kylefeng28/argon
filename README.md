@@ -19,19 +19,23 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   placeholders, F5 save-and-run with the cursor jumping to the error line.
 - Sandboxed Luau runtime on its own thread with the linear `flip()` model,
   Esc break within 100 ms, memory limit, readable errors with "did you mean"
-  hints, seedable PRNG, per-program file jail and `save`/`load`.
+  hints, seedable PRNG, per-program file jail, `save`/`load`, and
+  `alt_screen()` so full-screen programs leave the shell untouched.
+- Audio: a chip-style synth (`beep`, `tone` on 8 channels, square/triangle/
+  saw/sine/noise, envelopes, slides) plus WAV/OGG playback through cpal.
 - wgpu renderer: persistent 640x400 framebuffer (per-cart resolution),
   pixel-exact CPU-rasterized primitives, sprites with rotation/scale/flip,
   render-to-texture, blend modes, clip, camera, 8x16 text layer, integer-scaled
   presentation, and a headless mode for CI.
-- 14 demo programs in `DEMOS/`.
+- 16 demo programs in `DEMOS/`, including matrix rain and a chiptune.
 
-Not yet: palette mode, shaders (Tier 2), audio, gamepads, mouse events,
-`.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
+Not yet: palette mode, shaders (Tier 2), gamepads, mouse events, `.argon`
+zip export, browser build. See `docs/api-sketch.md` for the API.
 
 ## Build and run
 
-Requires stable Rust and a C++ compiler (for Luau).
+Requires stable Rust, a C++ compiler (for Luau) and, on Linux, the ALSA
+development package (`libasound2-dev` / `alsa-lib-devel`) for audio.
 
 ```
 cargo run --release              # windowed
@@ -63,6 +67,9 @@ driver bundled with Playwright's Chromium if present.
 
 ## Documents
 
+- `docs/manual.md` - the user manual (shell, editor, programs, files)
+- `docs/agent-guide.md` - compact rules and reference for code-generating
+  models; paste it into a prompt to have a model write Argon programs
 - `docs/requirements.md` - vision, decisions, functional and nonfunctional
   requirements, user stories, phasing
 - `docs/technical-design.md` - architecture
@@ -73,6 +80,7 @@ driver bundled with Playwright's Chromium if present.
 ```
 crates/argon-core   colors, font, text grid, draw commands, input, VFS, config
 crates/argon-gfx    wgpu renderer (framebuffer, text layer, presenter, headless)
+crates/argon-audio  mixer, chip synth, WAV/OGG decoding, cpal output
 crates/argon-lua    Luau sandbox, API bindings + docs table, program thread
 crates/argon-shell  console state machine, shell, editor, menus
 crates/argon        binary: winit app, headless runner, CLI

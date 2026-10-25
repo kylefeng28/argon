@@ -91,7 +91,7 @@ pub fn spawn_program(spec: ProgramSpec) -> ProgramHandle {
                     };
                     let frame = {
                         let mut m = rt.machine.borrow_mut();
-                        FrameOut { cmds: std::mem::take(&mut m.cmds), grid: m.grid.clone(), resolution: m.pending_resolution.take(), fps: m.fps }
+                        FrameOut { cmds: std::mem::take(&mut m.cmds), grid: m.grid.clone(), resolution: m.pending_resolution.take(), fps: m.fps, alt_screen: m.alt_screen, audio: std::mem::take(&mut m.audio) }
                     };
                     (exit, Some(frame))
                 }

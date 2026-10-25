@@ -11,6 +11,8 @@ pub struct CommandDoc {
 pub static COMMANDS: &[CommandDoc] = &[
     CommandDoc { name: "CLS", usage: "CLS", doc: "Clear the screen. Alias: CLEAR." },
     CommandDoc { name: "ECHO", usage: "ECHO [message]", doc: "Prints a message to the screen." },
+    CommandDoc { name: "VARCLEAR", usage: "VARCLEAR", doc: "Forget all variables and functions defined at the prompt." },
+
     CommandDoc { name: "HELP", usage: "HELP [topic]", doc: "Help on a command, a function or a category (e.g. HELP draw)." },
     CommandDoc { name: "VER", usage: "VER", doc: "Show the Argon version." },
     CommandDoc { name: "EXIT", usage: "EXIT", doc: "Quit Argon." },

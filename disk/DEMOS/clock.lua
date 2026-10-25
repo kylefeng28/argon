@@ -1,4 +1,5 @@
 -- clock: an analog stopwatch since the program started.
+alt_screen()
 local w, h = screen_size()
 local cx, cy, r = w / 2, h / 2, 150
 

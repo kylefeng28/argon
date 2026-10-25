@@ -10,6 +10,13 @@
 - Colors are either a palette index (palette carts) or a packed value from `rgb()`/`hsv()` (truecolor carts)
 - Coordinates are pixels in the virtual resolution, origin top-left, y down.
 
+Status: Implemented: System (plus `alt_screen`/`main_screen`), Math,
+Text, Input, Draw, Image (except `get_pixel`, `save_image`,
+`image_pixel`/`image_upload`), Sound (plus `note_freq`; `play_notes` not yet)
+and File. Not yet implemented: palette mode (`set_palette`/`palette_mode`),
+the GPU section, `mouse()`. `argon docs` prints the live table; this file is
+the design sketch.
+
 ## System
 
 | Function | Description |

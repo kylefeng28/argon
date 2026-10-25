@@ -3,6 +3,7 @@
 
 use crate::error::BREAK_MARKER;
 use crate::machine::{FlipError, Machine};
+use argon_audio::{AudioCmd, ToneParams, Wave};
 use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
 use argon_core::input::{KeyCode, PadButton};
 use argon_core::{Color, CELL_H, CELL_W};
@@ -81,6 +82,116 @@ impl FromLua for LuaImage {
             }),
         }
     }
+}
+
+/// Sound handle exposed to Lua.
+#[derive(Clone, Copy)]
+pub struct LuaSound {
+    pub id: u32,
+    pub duration: f32,
+}
+
+impl UserData for LuaSound {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("duration", |_, s| Ok(s.duration));
+    }
+}
+
+impl FromLua for LuaSound {
+    fn from_lua(v: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match &v {
+            Value::UserData(ud) => Ok(*ud.borrow::<LuaSound>()?),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "sound".to_string(),
+                message: Some("expected a sound from load_sound".to_string()),
+            }),
+        }
+    }
+}
+
+/// Playing-voice handle.
+#[derive(Clone, Copy)]
+pub struct LuaVoice(pub u32);
+
+impl UserData for LuaVoice {}
+
+impl FromLua for LuaVoice {
+    fn from_lua(v: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match &v {
+            Value::UserData(ud) => Ok(*ud.borrow::<LuaVoice>()?),
+            Value::Integer(i) => Ok(LuaVoice(*i as u32)),
+            Value::Number(n) => Ok(LuaVoice(*n as u32)),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "voice".to_string(),
+                message: Some("expected the value returned by play_sound".to_string()),
+            }),
+        }
+    }
+}
+
+fn tone_params(freq: Option<f64>, opts: Option<&Table>) -> mlua::Result<ToneParams> {
+    let mut p = ToneParams::default();
+    if let Some(f) = freq {
+        p.freq = f as f32;
+    }
+    if let Some(t) = opts {
+        if let Some(f) = t.get::<Option<f32>>("freq")? {
+            p.freq = f;
+        }
+        if let Some(w) = t.get::<Option<String>>("wave")? {
+            p.wave = Wave::parse(&w).ok_or_else(|| rt(format!("unknown wave '{w}'; use square, triangle, saw, sine or noise")))?;
+        }
+        if let Some(v) = t.get::<Option<f32>>("volume")? {
+            p.volume = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = t.get::<Option<f32>>("duty")? {
+            p.duty = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = t.get::<Option<f32>>("slide")? {
+            p.slide = v;
+        }
+        if let Some(v) = t.get::<Option<f32>>("attack")? {
+            p.attack = v.max(0.0);
+        }
+        if let Some(v) = t.get::<Option<f32>>("release")? {
+            p.release = v.max(0.0);
+        }
+        if let Some(v) = t.get::<Option<f32>>("pan")? {
+            p.pan = v.clamp(-1.0, 1.0);
+        }
+    }
+    p.freq = p.freq.clamp(1.0, 20000.0);
+    Ok(p)
+}
+
+/// "A4" -> 440, "C#5", "Eb3", "A4+" (ignored suffix). Octave defaults to 4.
+pub fn note_to_freq(name: &str) -> Option<f32> {
+    let s = name.trim();
+    let mut chars = s.chars();
+    let letter = chars.next()?.to_ascii_uppercase();
+    let base = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+    let rest: String = chars.collect();
+    let (acc, rest) = if let Some(r) = rest.strip_prefix('#') {
+        (1, r.to_string())
+    } else if let Some(r) = rest.strip_prefix('b') {
+        (-1, r.to_string())
+    } else {
+        (0, rest)
+    };
+    let octave: i32 = if rest.is_empty() { 4 } else { rest.parse().ok()? };
+    let midi = (octave + 1) * 12 + base + acc;
+    Some(440.0 * 2f32.powf((midi - 69) as f32 / 12.0))
 }
 
 fn sprite_opts(opts: Option<Table>) -> mlua::Result<SpriteOpts> {
@@ -221,6 +332,17 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
             return Err(rt("resolution must be between 16x16 and 8192x8192"));
         }
         mm.set_resolution(w, h);
+        Ok(())
+    });
+    def!("alt_screen", |mm| {
+        if mm.immediate {
+            return Err(rt("alt_screen() needs a running program."));
+        }
+        mm.enter_alt_screen();
+        Ok(())
+    });
+    def!("main_screen", |mm| {
+        mm.leave_alt_screen();
         Ok(())
     });
     def!("exit", |mm| {
@@ -542,6 +664,74 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
     });
     def!("set_target", |mm, img: Option<LuaImage>| {
         mm.cmds.push(DrawCmd::SetTarget(img.map(|i| i.id)));
+        Ok(())
+    });
+
+    // ---- Sound ----
+    def!("beep", |mm, freq: f64, duration: f64, opts: Option<Table>| {
+        let params = tone_params(Some(freq), opts.as_ref())?;
+        mm.audio.push(AudioCmd::Beep { params, duration: duration.clamp(0.0, 60.0) as f32 });
+        Ok(())
+    });
+    def!("tone", |mm, channel: f64, opts: Option<Table>| {
+        let ch = channel as i64;
+        if !(1..=8).contains(&ch) {
+            return Err(rt("tone: channel must be 1 to 8"));
+        }
+        let params = match opts {
+            Some(t) => Some(tone_params(None, Some(&t))?),
+            None => None,
+        };
+        mm.audio.push(AudioCmd::Tone { channel: (ch - 1) as u8, params });
+        Ok(())
+    });
+    def!("note_freq", |_mm, name: String| {
+        note_to_freq(&name).ok_or_else(|| rt(format!("note_freq: bad note name '{name}' (try 'A4' or 'C#5')")))
+    });
+    def!("load_sound", |mm, path: String| {
+        let bytes = mm.jail.read(&path).map_err(|e| rt(format!("load_sound: {e}")))?;
+        let data = argon_audio::decode(&bytes).map_err(|e| rt(format!("load_sound: {path}: {e}")))?;
+        let id = mm.next_sound;
+        mm.next_sound += 1;
+        let duration = data.duration();
+        mm.audio.push(AudioCmd::LoadSound { id, data });
+        Ok(LuaSound { id, duration })
+    });
+    def!("play_sound", |mm, snd: LuaSound, opts: Option<Table>| {
+        let mut volume = 1.0f32;
+        let mut pan = 0.0f32;
+        let mut pitch = 1.0f32;
+        let mut looping = false;
+        if let Some(t) = opts {
+            volume = t.get::<Option<f32>>("volume")?.unwrap_or(1.0);
+            pan = t.get::<Option<f32>>("pan")?.unwrap_or(0.0);
+            pitch = t.get::<Option<f32>>("pitch")?.unwrap_or(1.0);
+            looping = t.get::<Option<bool>>("loop")?.unwrap_or(false);
+        }
+        let voice = mm.next_voice;
+        mm.next_voice += 1;
+        mm.audio.push(AudioCmd::Play { voice, sound: snd.id, volume, pan, pitch, looping });
+        Ok(LuaVoice(voice))
+    });
+    def!("set_voice", |mm, v: LuaVoice, opts: Table| {
+        mm.audio.push(AudioCmd::SetVoice {
+            voice: v.0,
+            volume: opts.get::<Option<f32>>("volume")?,
+            pan: opts.get::<Option<f32>>("pan")?,
+            pitch: opts.get::<Option<f32>>("pitch")?,
+        });
+        Ok(())
+    });
+    def!("stop_sound", |mm, v: LuaVoice| {
+        mm.audio.push(AudioCmd::StopVoice(v.0));
+        Ok(())
+    });
+    def!("stop_all_sounds", |mm| {
+        mm.audio.push(AudioCmd::StopAll);
+        Ok(())
+    });
+    def!("set_volume", |mm, v: f64| {
+        mm.audio.push(AudioCmd::SetMaster(v.clamp(0.0, 1.0) as f32));
         Ok(())
     });
 

@@ -10,6 +10,7 @@ use argon_core::draw::DrawCmd;
 use argon_core::input::{InputState, KeyCode, KeyEvent};
 use argon_core::vfs::{self, Jail, ProgramLocation};
 use argon_core::{Color, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use argon_audio::{AudioCmd, AudioEngine};
 use argon_lua::machine::{MachineOptions, NoFlip};
 use argon_lua::program::{spawn_program, ProgramExit, ProgramHandle, ProgramSpec};
 use argon_lua::runtime::Runtime;
@@ -22,6 +23,8 @@ pub struct ConsoleOptions {
     pub config: Config,
     /// Demo programs copied into DEMOS/ at startup: (relative path, source).
     pub demos: Vec<(&'static str, &'static str)>,
+    /// Open the audio device (false for headless/CI).
+    pub audio: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +42,10 @@ struct Running {
     grid: TextGrid,
     resolution_changed: bool,
     fps: u32,
+    /// The shell's text layer before RUN, restored if the program used
+    /// `alt_screen()`.
+    shell_grid: TextGrid,
+    alt_screen: bool,
 }
 
 /// What the renderer needs this frame.
@@ -80,11 +87,12 @@ pub struct Console {
 
     disk: Jail,
     api: ApiTable,
+    audio: AudioEngine,
 }
 
 impl Console {
     pub fn new(opts: ConsoleOptions) -> Result<Console, String> {
-        let ConsoleOptions { paths, config, demos } = opts;
+        let ConsoleOptions { paths, config, demos, audio } = opts;
 
         // Copy demos to disk disk
         paths.ensure_dirs().map_err(|e| format!("cannot create {}: {e}", paths.disk.display()))?;
@@ -123,6 +131,7 @@ impl Console {
             program: None,
             disk,
             api: argon_lua::docs::api_table(),
+            audio: if audio { AudioEngine::new() } else { AudioEngine::disabled() },
         };
 
         c.banner();
@@ -196,10 +205,10 @@ impl Console {
     }
 
     fn prompt_text(&self) -> String {
-        return match self.cwd.is_empty() {
+        match self.cwd.is_empty() {
             true => "ARGON> ".to_string(),
             false => format!("ARGON:{}> ", self.cwd.replace('/', "\\").to_ascii_uppercase()),
-        };
+        }
     }
 
     // ----- input ----------------------------------------------------------------------
@@ -440,6 +449,7 @@ impl Console {
             let mut m = self.imm.machine.borrow_mut();
             self.grid = std::mem::replace(&mut m.grid, TextGrid::new(1, 1));
             self.cmds.append(&mut m.cmds);
+            self.audio.send_all(m.audio.drain(..));
             m.pending_resolution = None;
         }
         self.grid.cursor_visible = true;
@@ -573,7 +583,8 @@ impl Console {
         let mut grid = TextGrid::for_pixels(w, h);
         grid.cursor_visible = false;
         self.input.clear_all();
-        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1) });
+        let shell_grid = self.grid.clone();
+        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1), shell_grid, alt_screen: false });
         self.mode = Mode::Running;
         self.program_started = true;
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
@@ -926,6 +937,8 @@ impl Console {
                         }
                     }
                     r.fps = frame.fps;
+                    r.alt_screen = frame.alt_screen;
+                    self.audio.send_all(frame.audio);
                     cmds.extend(frame.cmds);
                     r.grid = frame.grid;
                     let snap = self.input.snapshot(&keymap);
@@ -954,9 +967,13 @@ impl Console {
                     r.resolution_changed = true;
                 }
             }
+            r.alt_screen = f.alt_screen;
+            self.audio.send_all(f.audio);
             cmds.extend(f.cmds);
             r.grid = f.grid;
         }
+        // Programs may not leave sound running (FR-A3).
+        self.audio.send(AudioCmd::StopAll);
 
         if from_editor {
             self.mode = Mode::Editor;
@@ -985,6 +1002,11 @@ impl Console {
             self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
             self.grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
             cmds.push(DrawCmd::Clear(self.theme.bg));
+        } else if r.alt_screen {
+            // The program drew on the alternate screen: bring the shell back.
+            cmds.push(DrawCmd::RestoreScreen);
+            self.grid = r.shell_grid;
+            self.grid.locate(0, self.prompt_row);
         } else {
             // Keep the program's screen; continue below its text cursor.
             self.grid = r.grid;
@@ -1093,7 +1115,7 @@ mod tests {
     fn console() -> (Console, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::at(dir.path().to_path_buf(), None);
-        let c = Console::new(ConsoleOptions { paths, config: Config::default(), demos: vec![("hello.lua", "print('hi')\n")] }).unwrap();
+        let c = Console::new(ConsoleOptions { paths, config: Config::default(), demos: vec![("hello.lua", "print('hi')\n")], audio: false }).unwrap();
         (c, dir)
     }
 
@@ -1202,6 +1224,21 @@ mod tests {
     }
 
     /*
+    #[test]
+    fn alt_screen_restores_shell_contents() {
+        let (mut c, _d) = console();
+        type_line(&mut c, "print('keep me')");
+        c.disk.write("full.lua", b"alt_screen() print('program text') flip()").unwrap();
+        type_line(&mut c, "run full");
+        pump(&mut c, 40);
+        assert!(!c.is_running());
+        let t = c.screen_text();
+        assert!(t.contains("keep me"), "{t}");
+        assert!(!t.contains("program text"), "{t}");
+        let out = c.update(0.016);
+        let _ = out;
+    }
+
     #[test]
     fn del_requires_confirmation() {
         let (mut c, _d) = console();

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/argon-core",
     "crates/argon-gfx",
+    "crates/argon-audio",
     "crates/argon-lua",
     "crates/argon-shell",
     "crates/argon",
@@ -16,6 +17,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 argon-core = { path = "crates/argon-core" }
 argon-gfx = { path = "crates/argon-gfx" }
+argon-audio = { path = "crates/argon-audio" }
 argon-lua = { path = "crates/argon-lua" }
 argon-shell = { path = "crates/argon-shell" }
 

@@ -1,5 +1,6 @@
 -- bounce: a ball, the pad buttons, and the main loop.
 -- Arrow keys steer, A (Z key) speeds up, Esc quits.
+alt_screen()
 local w, h = screen_size()
 local x, y = w / 2, h / 2
 local dx, dy = 3, 2
