@@ -30,6 +30,10 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   batches; errors report the shader's own line numbers. A bare `.glsl` file
   is a runnable program (`RUN name`), so Shadertoy code can be dropped into
   `DEMOS/shadertoy/` or your own folder as-is.
+- Compute shaders: GLSL compute kernels (`load_compute`, `dispatch`) over GPU
+  storage buffers (`new_buffer`, `write_buffer`), drawn directly with
+  `draw_points` or read by fragment shaders; Lua never touches the elements.
+- Mouse input for programs (position, buttons, wheel); Argon draws no cursor.
 - Audio: a chip-style synth (`beep`, `tone` on 8 channels, square/triangle/
   saw/sine/noise, envelopes, slides) plus WAV/OGG playback through cpal.
 - wgpu renderer: persistent framebuffer at the cart's resolution (1280x800
@@ -45,7 +49,7 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   - `FILTER` presets: none/glow/scanlines/neon/crt
   - Filters: The `neon` display filter gives bright strokes a white-hot core, a colored halo and a glass-like specular rim, the light ribbon look; `glow`, `glass`, `scanlines` and `crt` are also available (`FILTER`).
   - Font: Text is Share Tech Mono rasterized at the window's scale (so it stays sharp), with ProggyClean and the Unscii bitmap font as alternatives (`FONT`).
-- 28 demo programs in `DEMOS/`: GPU Mandelbrot and Julia, a raymarched SDF scene, shader post-processing, light cycles, Game of Life, flocking boids, strange attractors, a progressive Mandelbrot and an animated Julia set, a tactical HUD, matrix rain, the Tetris theme as a chiptune, a software-rendered 3D cube, and more.
+- 30 demo programs in `DEMOS/`: a million GPU-simulated particles, Gray-Scott reaction-diffusion, GPU Mandelbrot and Julia, a raymarched SDF scene, shader post-processing, light cycles, Game of Life, flocking boids, strange attractors, a progressive Mandelbrot and an animated Julia set, a tactical HUD, matrix rain, the Tetris theme as a chiptune, a software-rendered 3D cube, and more.
 
 Not yet: palette mode, gamepads, `.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
 

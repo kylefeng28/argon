@@ -9,12 +9,32 @@ pub struct ImageId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ShaderId(pub u32);
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct BufferId(pub u32);
+
+/// Options for `draw_points`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PointsOpts {
+    /// Number of points (elements of the position buffer).
+    pub count: u32,
+    /// Floats per element in the position buffer (2 for vec2, 4 for vec4);
+    /// the first two are x, y in pixels.
+    pub stride: u32,
+    /// Optional per-point RGBA (vec4, 0..1), multiplied with `color`.
+    pub colors: Option<BufferId>,
+    pub color: crate::Color,
+    /// Square size in pixels.
+    pub size: f32,
+}
+
 /// Per-draw inputs for a shader: which images feed iChannel0..3, user
 /// uniform values by slot, and the Shadertoy globals the program knows
 /// (time, mouse). The renderer fills resolution and offset.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderInputs {
     pub channels: [Option<ImageId>; 4],
+    /// Storage buffers by binding number (group 1).
+    pub buffers: [Option<BufferId>; crate::shader::MAX_BUFFERS],
     pub user: [[f32; 4]; crate::shader::MAX_USER_UNIFORMS],
     pub time: f32,
     pub time_delta: f32,
@@ -27,6 +47,7 @@ impl Default for ShaderInputs {
     fn default() -> Self {
         ShaderInputs {
             channels: [None; 4],
+            buffers: [None; crate::shader::MAX_BUFFERS],
             user: [[0.0; 4]; crate::shader::MAX_USER_UNIFORMS],
             time: 0.0,
             time_delta: 1.0 / 60.0,
@@ -140,6 +161,15 @@ pub enum DrawCmd {
     DrawShader { id: ShaderId, rect: Option<Rect>, inputs: ShaderInputs },
     /// Apply a shader to subsequent primitive/sprite draws (`None` = off).
     SetShader { id: Option<ShaderId>, inputs: ShaderInputs },
+    /// Allocate a zeroed GPU storage buffer of `bytes` bytes.
+    CreateBuffer { id: BufferId, bytes: u64 },
+    DestroyBuffer(BufferId),
+    /// Upload bytes at a byte offset (applied before this frame's GPU work).
+    WriteBuffer { id: BufferId, offset: u64, data: Vec<u8> },
+    /// Run a compute shader over `count` invocations (x, y, z).
+    Dispatch { id: ShaderId, count: [u32; 3], inputs: ShaderInputs },
+    /// Draw one square per element of a buffer, positions in pixels.
+    DrawPoints { buffer: BufferId, opts: PointsOpts },
 }
 
 /// Everything the renderer needs for one frame.

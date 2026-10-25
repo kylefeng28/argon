@@ -17,7 +17,7 @@ pub mod theme;
 pub mod vfs;
 
 pub use color::Color;
-pub use draw::{DrawCmd, ImageId, Rect, ShaderId};
+pub use draw::{BufferId, DrawCmd, ImageId, Rect, ShaderId};
 pub use font::Font;
 pub use input::{InputSnapshot, KeyCode, KeyEvent, Modifiers, MouseButton, MouseState, PadButton};
 pub use text::{Cell, TextGrid};

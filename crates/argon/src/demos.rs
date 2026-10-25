@@ -39,6 +39,8 @@ pub fn all() -> Vec<(&'static str, &'static str)> {
         demo!("julia_gpu.lua"),
         demo!("raymarch.lua"),
         demo!("shaderfx.lua"),
+        demo!("particles_gpu.lua"),
+        demo!("reaction_diffusion.lua"),
         demo!("shadertoy/README.glsl"),
     ]
 }

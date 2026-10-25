@@ -4,9 +4,9 @@
 use crate::error::BREAK_MARKER;
 use crate::machine::{FlipError, Machine};
 use argon_audio::{AudioCmd, ToneParams, Wave};
-use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, ShaderId, ShaderInputs, SpriteOpts};
+use argon_core::draw::{BlendMode, BufferId, DrawCmd, ImageId, PointsOpts, Rect, ShaderId, ShaderInputs, SpriteOpts};
 use argon_core::input::{KeyCode, MouseButton, PadButton};
-use argon_core::shader::{CompiledShader, UniformType, MAX_USER_UNIFORMS};
+use argon_core::shader::{CompiledShader, Stage, UniformType, MAX_BUFFERS, MAX_USER_UNIFORMS};
 
 use argon_core::{Color, CELL_H, CELL_W};
 use mlua::{FromLua, Lua, LuaSerdeExt, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value};
@@ -194,7 +194,117 @@ fn shader_inputs(mm: &Machine, sh: &LuaShader, opts: Option<&Table>) -> mlua::Re
             }
         }
     }
+    shader_buffers(sh, opts, &mut inputs)?;
     Ok((inputs, rect))
+}
+
+/// Element formats a GPU buffer can hold. All are 4-byte components.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BufFormat {
+    Float,
+    Vec2,
+    Vec4,
+    Int,
+    Uint,
+}
+
+impl BufFormat {
+    fn parse(s: &str) -> Option<BufFormat> {
+        match s {
+            "float" => Some(BufFormat::Float),
+            "vec2" => Some(BufFormat::Vec2),
+            "vec4" => Some(BufFormat::Vec4),
+            "int" => Some(BufFormat::Int),
+            "uint" => Some(BufFormat::Uint),
+            _ => None,
+        }
+    }
+
+    /// Components per element.
+    fn components(self) -> u32 {
+        match self {
+            BufFormat::Vec2 => 2,
+            BufFormat::Vec4 => 4,
+            _ => 1,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            BufFormat::Float => "float",
+            BufFormat::Vec2 => "vec2",
+            BufFormat::Vec4 => "vec4",
+            BufFormat::Int => "int",
+            BufFormat::Uint => "uint",
+        }
+    }
+}
+
+/// A GPU storage buffer handle exposed to Lua.
+#[derive(Clone, Copy)]
+pub struct LuaBuffer {
+    pub id: BufferId,
+    pub count: u32,
+    pub format: BufFormat,
+}
+
+impl UserData for LuaBuffer {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("count", |_, b| Ok(b.count));
+        fields.add_field_method_get("format", |_, b| Ok(b.format.name()));
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method("__tostring", |_, b, ()| Ok(format!("buffer({} x {})", b.count, b.format.name())));
+        methods.add_meta_method("__len", |_, b, ()| Ok(b.count));
+    }
+}
+
+impl FromLua for LuaBuffer {
+    fn from_lua(v: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match &v {
+            Value::UserData(ud) => Ok(*ud.borrow::<LuaBuffer>()?),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "buffer".to_string(),
+                message: Some("expected a buffer from new_buffer".to_string()),
+            }),
+        }
+    }
+}
+
+/// Largest buffer a program may ask for (the GPU may allow less).
+pub const MAX_BUFFER_BYTES: u64 = 1 << 30;
+
+/// Fill `inputs.buffers` from `opts.buffers = { [1] = binding 0, ... }` and
+/// check the shader's declared bindings are all supplied, with no writable
+/// buffer bound twice.
+fn shader_buffers(sh: &LuaShader, opts: Option<&Table>, inputs: &mut ShaderInputs) -> mlua::Result<()> {
+    let mut given: [Option<LuaBuffer>; MAX_BUFFERS] = [None; MAX_BUFFERS];
+    if let Some(t) = opts {
+        if let Some(list) = t.get::<Option<Table>>("buffers")? {
+            for (i, slot) in given.iter_mut().enumerate() {
+                *slot = list.get::<Option<LuaBuffer>>(i + 1)?;
+            }
+        }
+    }
+    for b in &sh.compiled.buffers {
+        let Some(buf) = given[b.binding as usize] else {
+            return Err(rt(format!(
+                "shader declares a buffer at binding {} but opts.buffers[{}] is missing",
+                b.binding,
+                b.binding + 1
+            )));
+        };
+        if b.writable {
+            let dup = sh.compiled.buffers.iter().any(|o| o.binding != b.binding && given[o.binding as usize].map(|g| g.id) == Some(buf.id));
+            if dup {
+                return Err(rt(format!("buffer bound at binding {} is written by the shader and also bound elsewhere; use two buffers (ping-pong)", b.binding)));
+            }
+        }
+        inputs.buffers[b.binding as usize] = Some(buf.id);
+    }
+    Ok(())
 }
 
 /// Playing-voice handle.
@@ -793,13 +903,120 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
         mm.cmds.push(DrawCmd::CreateShader { id, shader: compiled.clone() });
         Ok(LuaShader { id, compiled })
     });
+    def!("load_compute", |mm, src: String| {
+        let source = if !src.contains('\n') && (src.ends_with(".glsl") || src.ends_with(".comp")) {
+            mm.jail.read_string(&src).map_err(|e| rt(format!("load_compute: {e}")))?
+        } else {
+            src
+        };
+        let compiled = argon_core::shader::compile_compute(&source).map_err(|e| rt(format!("load_compute: {e}")))?;
+        let id = ShaderId(mm.next_shader);
+        mm.next_shader += 1;
+        mm.shader_uniforms.insert(id.0, [[0.0; 4]; MAX_USER_UNIFORMS]);
+        mm.cmds.push(DrawCmd::CreateShader { id, shader: compiled.clone() });
+        Ok(LuaShader { id, compiled })
+    });
+    def!("dispatch", |mm, sh: LuaShader, count: Value, opts: Option<Table>| {
+        if sh.compiled.stage != Stage::Compute {
+            return Err(rt("dispatch: this is a fragment shader; use draw_shader, or load_compute for compute shaders"));
+        }
+        let num = |v: Value| -> mlua::Result<u32> {
+            match v {
+                Value::Integer(i) if i >= 0 => Ok(i as u32),
+                Value::Number(n) if n >= 0.0 => Ok(n.ceil() as u32),
+                Value::Nil => Ok(1),
+                other => Err(rt(format!("dispatch: count must be a number or {{x, y, z}}, got {}", other.type_name()))),
+            }
+        };
+        let count = match count {
+            Value::Table(t) => [num(t.get(1)?)?, num(t.get(2)?)?, num(t.get(3)?)?],
+            other => [num(other)?, 1, 1],
+        };
+        let (inputs, _) = shader_inputs(&mm, &sh, opts.as_ref())?;
+        mm.cmds.push(DrawCmd::Dispatch { id: sh.id, count, inputs });
+        Ok(())
+    });
+    def!("new_buffer", |mm, count: f64, format: Option<String>| {
+        let fmt_name = format.unwrap_or_else(|| "float".to_string());
+        let fmt = BufFormat::parse(&fmt_name).ok_or_else(|| rt(format!("new_buffer: unknown format '{fmt_name}'; use float, vec2, vec4, int or uint")))?;
+        if count.is_nan() || count < 1.0 {
+            return Err(rt("new_buffer: count must be at least 1"));
+        }
+        let count = count as u64;
+        let bytes = count * fmt.components() as u64 * 4;
+        if bytes > MAX_BUFFER_BYTES {
+            return Err(rt(format!("new_buffer: {bytes} bytes is over the 1 GB limit")));
+        }
+        let id = BufferId(mm.next_buffer);
+        mm.next_buffer += 1;
+        mm.cmds.push(DrawCmd::CreateBuffer { id, bytes });
+        Ok(LuaBuffer { id, count: count as u32, format: fmt })
+    });
+    def!("write_buffer", |mm, buf: LuaBuffer, data: Table, start: Option<f64>| {
+        // Flat list of numbers, element `start` (1-based) onward.
+        let comps = buf.format.components() as u64;
+        let first = start.map(|s| s.max(1.0) as u64 - 1).unwrap_or(0);
+        let n = data.raw_len() as u64;
+        if n == 0 {
+            return Ok(());
+        }
+        if !n.is_multiple_of(comps) {
+            return Err(rt(format!("write_buffer: {n} numbers is not a whole number of {} elements", buf.format.name())));
+        }
+        if first + n / comps > buf.count as u64 {
+            return Err(rt(format!("write_buffer: writes past the end ({} elements, buffer has {})", first + n / comps, buf.count)));
+        }
+        let mut bytes = Vec::with_capacity(n as usize * 4);
+        for i in 1..=n {
+            let v: f64 = data.raw_get(i)?;
+            let b = match buf.format {
+                BufFormat::Int => (v as i32).to_le_bytes(),
+                BufFormat::Uint => (v.max(0.0) as u32).to_le_bytes(),
+                _ => (v as f32).to_le_bytes(),
+            };
+            bytes.extend_from_slice(&b);
+        }
+        mm.cmds.push(DrawCmd::WriteBuffer { id: buf.id, offset: first * comps * 4, data: bytes });
+        Ok(())
+    });
+    def!("draw_points", |mm, buf: LuaBuffer, opts: Option<Table>| {
+        if !matches!(buf.format, BufFormat::Vec2 | BufFormat::Vec4) {
+            return Err(rt("draw_points: the buffer must be vec2 or vec4 (xy = position in pixels)"));
+        }
+        let mut o = PointsOpts { count: buf.count, stride: buf.format.components(), colors: None, color: mm.color, size: 1.0 };
+        if let Some(t) = opts {
+            if let Some(c) = t.get::<Option<f64>>("color")? {
+                o.color = Color::from_u32(c.max(0.0) as u32);
+            }
+            if let Some(sz) = t.get::<Option<f32>>("size")? {
+                o.size = sz.clamp(1.0, 256.0);
+            }
+            if let Some(n) = t.get::<Option<f64>>("count")? {
+                o.count = (n.max(0.0) as u32).min(buf.count);
+            }
+            if let Some(c) = t.get::<Option<LuaBuffer>>("colors")? {
+                if c.format != BufFormat::Vec4 {
+                    return Err(rt("draw_points: opts.colors must be a vec4 buffer (r, g, b, a in 0..1)"));
+                }
+                o.colors = Some(c.id);
+            }
+        }
+        mm.cmds.push(DrawCmd::DrawPoints { buffer: buf.id, opts: o });
+        Ok(())
+    });
     def!("draw_shader", |mm, sh: LuaShader, opts: Option<Table>| {
+        if sh.compiled.stage != Stage::Fragment {
+            return Err(rt("draw_shader: this is a compute shader; use dispatch"));
+        }
         let (inputs, rect) = shader_inputs(&mm, &sh, opts.as_ref())?;
         mm.cmds.push(DrawCmd::DrawShader { id: sh.id, rect, inputs });
         Ok(())
     });
     def!("set_shader", |mm, sh: Option<LuaShader>, opts: Option<Table>| {
         match sh {
+            Some(sh) if sh.compiled.stage == Stage::Compute => {
+                return Err(rt("set_shader: this is a compute shader; use dispatch"));
+            }
             Some(sh) => {
                 let (inputs, _) = shader_inputs(&mm, &sh, opts.as_ref())?;
                 mm.cmds.push(DrawCmd::SetShader { id: Some(sh.id), inputs });

@@ -70,6 +70,10 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
         renderer.clear_color = out.clear_color;
         renderer.filter = DisplayFilter::parse(console.filter_name()).unwrap_or_default();
         renderer.render(&out.cmds, Some(&out.grid), out.cursor_on);
+        // Nothing presents headless, so nothing throttles submission; wait
+        // for each frame like vsync would instead of queueing hundreds of
+        // heavy frames on a software rasterizer.
+        renderer.wait_idle();
         if console.wants_quit() {
             break;
         }

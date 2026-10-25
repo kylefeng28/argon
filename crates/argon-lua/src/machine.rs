@@ -149,6 +149,7 @@ pub struct Machine {
     pub next_sound: u32,
     pub next_voice: u32,
     pub next_shader: u32,
+    pub next_buffer: u32,
     /// Persistent uniform values set with `set_uniform`, per shader.
     pub shader_uniforms: HashMap<u32, [[f32; 4]; argon_core::shader::MAX_USER_UNIFORMS]>,
     /// Last mouse click position, for iMouse.zw.
@@ -190,6 +191,7 @@ impl Machine {
             next_sound: 1,
             next_voice: 1,
             next_shader: 1,
+            next_buffer: 1,
             shader_uniforms: HashMap::new(),
             click_pos: (0.0, 0.0),
             window: opts.window,

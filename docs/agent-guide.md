@@ -90,6 +90,29 @@ Lua (Luau) file and nothing else unless asked. Follow these rules exactly.
   with no Lua. Put the title, source URL and author in `//` comments at the
   top, and optional settings as `// argon: resolution = "hd"`.
 
+## Compute shaders (GPU)
+
+- Use compute when there are thousands or millions of things to simulate
+  (particles, cellular automata, reaction-diffusion): the data stays on the
+  GPU and Lua only issues commands.
+- `local buf = new_buffer(n, "vec4")` makes a zero-filled storage buffer
+  (`float`, `vec2`, `vec4`, `int`, `uint`). `write_buffer(buf, {...})`
+  uploads a flat number list for seeding; prefer seeding with a dispatch.
+- `local cs = load_compute(src)` compiles GLSL with
+  `layout(local_size_x = 256) in;`, buffers declared as
+  `layout(std430, binding = 0) buffer P { vec4 p[]; };` (binding = position
+  in `opts.buffers`), `uniform` declarations, and `void main()`.
+  Always start with `uint i = gl_GlobalInvocationID.x; if (i >= iCount.x) return;`.
+- `dispatch(cs, n, { buffers = { buf }, uniforms = { dt = 1/60 } })` runs n
+  invocations (or `{w, h}` for 2D work), in order with the frame's drawing.
+- `draw_points(buf, { colors = colbuf, size = 1 })` draws one square per
+  element at its xy (pixels). With many points use `blend("add")` and low
+  alpha (about 0.02-0.06 for a million points) or the screen saturates.
+- Fragment shaders read buffers too: `draw_shader(sh, { buffers = { buf } })`
+  with the same `buffer` declaration (read-only there).
+- To ping-pong (read state A, write state B), use two buffers and swap them
+  in Lua each frame. Atomics (`atomicAdd`) are not supported.
+
 ## Sound
 
 - `beep(freq, duration, { wave = "square" })` plays one note; waves are
@@ -113,7 +136,7 @@ delta_time()  -- Seconds the last frame took.
 frame()  -- Number of frames presented so far.
 fps([n])  -- Get or set the target frame rate.
 screen_size()  -- Width and height of the virtual screen in pixels.
-set_resolution(w, h) or set_resolution(preset)  -- Change the virtual resolution. Presets: tiny, retro, classic, hd.
+set_resolution(w, h) or set_resolution(preset)  -- Change the virtual resolution. Presets: tiny 128x128, retro 320x240, classic 640x400, hd 1280x800 (default), uhd 2560x1600, native (the window).
 alt_screen()  -- Switch to a fresh, empty screen. The shell's screen is saved and comes back when the program ends (or calls main_screen).
 main_screen()  -- Return to the screen that was showing before alt_screen().
 exit()  -- End the program and return to the shell.
@@ -141,6 +164,11 @@ button_pressed(name [, player])  -- Was the button pressed this frame?
 button_released(name [, player])  -- Was the button released this frame?
 key(name)  -- Is a keyboard key held? e.g. 'a', 'space', 'enter', 'f1'.
 key_pressed(name)  -- Was the key pressed this frame?
+mouse()  -- Pointer position in screen pixels and whether it is over the screen: x, y, inside. No cursor is drawn; draw your own.
+mouse_button([button])  -- Is a mouse button held? 'left' (default), 'right' or 'middle'.
+mouse_pressed([button])  -- Was the mouse button pressed this frame?
+mouse_released([button])  -- Was the mouse button released this frame?
+mouse_wheel()  -- Wheel movement this frame in notches (positive = away from you); second value is horizontal.
 key_released(name)  -- Was the key released this frame?
 
 ## Draw
@@ -157,7 +185,7 @@ triangle(x1, y1, x2, y2, x3, y3 [, color])  -- Triangle outline.
 fill_triangle(x1, y1, x2, y2, x3, y3 [, color])  -- Filled triangle.
 polygon({x1, y1, x2, y2, ...} [, color])  -- Polygon outline from a flat list of coordinates.
 fill_polygon({x1, y1, x2, y2, ...} [, color])  -- Filled polygon from a flat list of coordinates.
-draw_text(x, y, text [, color [, scale]])  -- Draw text in pixels (not the text grid) using the console font.
+draw_text(x, y, text [, color [, scale]])  -- Draw text in pixels (not the text grid) using the console font. scale is a multiple of the 8x16 glyph; the default matches the text grid (2 at hd).
 clip(x, y, w, h) or clip()  -- Restrict drawing to a rectangle; clip() removes the restriction.
 camera(dx, dy) or camera()  -- Offset all subsequent drawing; camera() resets.
 blend(mode)  -- Blend mode for subsequent drawing: alpha, add, multiply, replace.
@@ -171,40 +199,17 @@ draw_sprite(img, sx, sy, sw, sh, x, y [, opts])  -- Draw a rectangle of an image
 draw_image_quad(img, x1, y1, x2, y2, x3, y3, x4, y4)  -- Draw an image stretched onto four corners.
 set_target(img) or set_target()  -- Draw into an image instead of the screen; set_target() goes back to the screen.
 
-## Mouse
-
-- `local x, y, inside = mouse()` gives the pointer in screen pixels. Argon
-  never draws a cursor: if the program uses the mouse, draw a crosshair at
-  (x, y) yourself.
-- `mouse_button([name])`, `mouse_pressed([name])`, `mouse_released([name])`
-  take `"left"` (default), `"right"` or `"middle"`.
-- `mouse_wheel()` returns the notches scrolled this frame (positive = away
-  from the user), e.g. `zoom = zoom * 1.1 ^ mouse_wheel()`.
-
-## Shaders (GPU)
-
-- `local sh = load_shader(src)` compiles Shadertoy-style GLSL: the shader
-  defines `void mainImage(out vec4 fragColor, in vec2 fragCoord)` and may use
-  `iResolution`, `iTime`, `iTimeDelta`, `iFrame`, `iMouse`, `iChannel0..3`.
-  Declare your own inputs as `uniform float speed;` (also vec2/vec3/vec4/
-  int/bool) at the top of the shader.
-- `draw_shader(sh, { uniforms = { speed = 2, center = {x, y} }, channels =
-  { img }, rect = {x, y, w, h} })` runs it over the screen (or the rect).
-  Channel images are sampled bottom-up like Shadertoy, so an image drawn
-  with `texture(iChannel0, fragCoord / iResolution.xy)` appears upright.
-- `set_shader(sh)` ... `set_shader()` applies a shader to sprites and shapes
-  drawn in between; inside it `vUv` and `vColor` are the sprite's texture
-  coordinate and tint, and `iChannel0` is its texture (sample with
-  `textureTopDown(iChannel0, vUv)`).
-- `shader_source("plasma" | "ripple" | "pixelate" | "scanlines" | "tint")`
-  returns ready-made GLSL to load or copy.
-- Fragment shaders cannot read the screen; draw the scene into an image with
-  `set_target(img)` and pass it as a channel for post-processing.
-- Mandelbrot/Julia/raymarching belong in a shader, not in Lua loops.
-- If the whole program is one full-screen shader, write a `.glsl` file
-  containing just `mainImage` (plus helper functions); Argon runs it directly
-  with no Lua. Put the title, source URL and author in `//` comments at the
-  top, and optional settings as `// argon: resolution = "hd"`.
+## GPU
+load_shader(source or path)  -- Compile a Shadertoy-style GLSL fragment shader: void mainImage(out vec4 fragColor, in vec2 fragCoord). Provides iResolution, iTime, iTimeDelta, iFrame, iMouse, iChannel0-3 and your own 'uniform float x;' declarations.
+draw_shader(shader [, opts])  -- Run a shader over the screen or opts.rect = {x, y, w, h}. opts.channels = {img, ...} feed iChannel0-3; opts.uniforms = {name = value} set user uniforms (numbers or {x, y[, z[, w]]} tables); opts.buffers = {buf, ...} bind storage buffers the shader reads.
+set_shader(shader [, opts]) or set_shader()  -- Apply a shader to everything drawn afterwards (sprites, shapes, text). iChannel0 is the sprite's own texture and vUv/vColor are available. set_shader() turns it off.
+set_uniform(shader, name, value)  -- Set a uniform's value that stays until changed; per-draw opts.uniforms override it.
+load_compute(source or path)  -- Compile a GLSL compute shader: layout(local_size_x = 256) in; storage buffers as layout(std430, binding = 0) buffer Name { vec4 data[]; }; and void main(). gl_GlobalInvocationID indexes the work and iCount is the dispatch size; iTime, iMouse and your uniforms work as in load_shader.
+dispatch(shader, count [, opts])  -- Run a compute shader over count invocations (a number, or {x, y} for 2D work). opts.buffers = {b0, b1, ...} binds buffers in binding order; opts.uniforms as in draw_shader. Runs in order with drawing, on the GPU.
+new_buffer(count [, format])  -- A GPU storage buffer of count elements, zero-filled. format: float (default), vec2, vec4, int, uint. Shaders read and write it; Lua does not see its contents.
+write_buffer(buffer, numbers [, start])  -- Upload a flat list of numbers into a buffer from element start (1-based, default 1). For seeding; generate big data on the GPU with dispatch instead.
+draw_points(buffer [, opts])  -- Draw a square per element of a vec2/vec4 buffer, xy = position in pixels, straight from the GPU. opts: size (px), color, count, colors = vec4 buffer of per-point RGBA (0-1). Uses the current blend mode, camera and clip.
+shader_source(name)  -- GLSL source of a built-in shader to use or copy: plasma, ripple, pixelate, scanlines, tint.
 
 ## Sound
 beep(freq, duration [, opts])  -- Play a synth note. opts: wave (square, triangle, saw, sine, noise), volume 0-1, duty, slide (Hz/s), attack, release, pan.
@@ -237,8 +242,6 @@ round(x)  -- Round to the nearest integer.
 sign(x)  -- -1, 0 or 1.
 dist(x1, y1, x2, y2)  -- Distance between two points.
 angle(x1, y1, x2, y2)  -- Angle in radians from point 1 to point 2.
-
-(Regenerate this list with `argon docs --compact`.)
 
 ## Complete examples
 

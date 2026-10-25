@@ -15,8 +15,9 @@
 Text, Input (including `mouse`, `mouse_button`, `mouse_pressed`,
 `mouse_released`, `mouse_wheel`), Draw, Image (except `get_pixel`,
 `save_image`, `image_pixel`/`image_upload`), GPU (`load_shader`,
-`draw_shader`, `set_shader`, `set_uniform`, `shader_source`), Sound (plus
-`note_freq`; `play_notes` not yet) and File.
+`draw_shader`, `set_shader`, `set_uniform`, `shader_source`, plus Tier 4
+compute: `load_compute`, `dispatch`, `new_buffer`, `write_buffer`,
+`draw_points`), Sound (plus `note_freq`; `play_notes` not yet) and File.
 
 **Not yet implemented**: palette mode (`set_palette`/`palette_mode`).
 `argon docs` prints the live table; this file is the design sketch.

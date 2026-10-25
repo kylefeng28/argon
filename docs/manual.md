@@ -158,6 +158,16 @@ PROGRAMS
     set_shader applies it to sprites and shapes. shader_source(name) gives
     built-in examples. Compile errors report the shader's line number.
 
+    Compute: load_compute(glsl) compiles a compute kernel (layout(local_size_x
+    = 256) in; void main()). new_buffer(count, "float"|"vec2"|"vec4"|"int"|
+    "uint") makes a GPU storage buffer; declare it in GLSL as
+    layout(std430, binding = 0) buffer B { vec4 p[]; }. dispatch(cs, n,
+    { buffers = {buf}, uniforms = {...} }) runs n invocations (iCount.x is n;
+    guard with if (gl_GlobalInvocationID.x >= iCount.x) return;).
+    draw_points(buf, { colors = colbuf, size = 1 }) draws one square per
+    element from xy positions. Fragment shaders can read buffers too
+    (draw_shader(sh, { buffers = {buf} })). Atomics are not supported yet.
+
     Files: read_file/write_file see only the program's own folder; save/load
     keep small values in SAVE/ between runs. require("name") loads name.lua
     from the program folder.
@@ -191,6 +201,7 @@ FUNCTIONS
     Image    load_image new_image image_size draw_image draw_sprite
              draw_image_quad set_target
     GPU      load_shader draw_shader set_shader set_uniform shader_source
+             load_compute dispatch new_buffer write_buffer draw_points
     Sound    beep tone note_freq load_sound play_sound set_voice stop_sound
              stop_all_sounds set_volume
     File     read_file write_file append_file file_exists delete_file

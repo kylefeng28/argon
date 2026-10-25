@@ -157,7 +157,7 @@ one API.
 | FR-G9 | P0 | Performance: at `classic` resolution, 100,000 `draw_sprite` calls per frame at 60 FPS on a 2020 integrated GPU; a full-screen Shadertoy shader at native 1080p at 60 FPS on a mid-range discrete GPU. |
 | FR-G10 | P1 | `get_pixel` and `save_image(img, path)` (PNG) read back GPU data; documented as slow-path operations. |
 | FR-G11 | P2 | Tier 3: cameras, meshes, transforms, default lit material, custom vertex shaders. |
-| FR-G12 | P2 | Tier 4: compute shaders over buffers. |
+| FR-G12 | P2 | Tier 4: compute shaders over buffers. Implemented: GLSL compute (`load_compute`, `dispatch`), storage buffers (`new_buffer`, `write_buffer`, readable from fragment shaders), `draw_points`. Not yet: atomics, storage textures, Lua readback. |
 
 ### 5.6 Input
 

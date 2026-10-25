@@ -12,6 +12,22 @@ use std::sync::Arc;
 /// Maximum number of user `uniform` declarations per shader.
 pub const MAX_USER_UNIFORMS: usize = 16;
 pub const CHANNELS: usize = 4;
+/// Storage buffers a shader may declare (`layout(std430, binding = 0..7) buffer`).
+pub const MAX_BUFFERS: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    Fragment,
+    Compute,
+}
+
+/// A storage buffer the shader declares (all live in bind group 1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BufferBinding {
+    pub binding: u32,
+    /// The shader stores into it (compute only; fragment buffers are readonly).
+    pub writable: bool,
+}
 
 /// Globals block layout (std140), 144 bytes. Kept in sync with PRELUDE.
 #[repr(C)]
@@ -84,6 +100,11 @@ pub struct CompiledShader {
     pub module: naga::Module,
     pub info: naga::valid::ModuleInfo,
     pub uniforms: Vec<UserUniform>,
+    pub stage: Stage,
+    /// Storage buffers by binding (group 1), sorted.
+    pub buffers: Vec<BufferBinding>,
+    /// Compute workgroup size (local_size_x/y/z); zeros for fragment.
+    pub workgroup_size: [u32; 3],
     /// Full GLSL after preprocessing (for debugging).
     pub source: String,
 }
@@ -167,6 +188,71 @@ void main() {
 }
 "#;
 
+/// Prelude for compute shaders: the same globals and channels as fragment
+/// shaders (sampled with an explicit LOD, since compute has no derivatives),
+/// plus `iCount`, the invocation count passed to `dispatch`.
+const COMPUTE_PRELUDE: &str = r#"#version 450
+layout(set = 0, binding = 0) uniform ArgonGlobals {
+    vec3 iResolution;
+    float iTime;
+    float iTimeDelta;
+    int iFrame;
+    float iFrameRate;
+    float iSampleRate;
+    vec4 iMouse;
+    vec4 iDate;
+    vec4 iOffset;
+    vec4 _iChannelRes[4];
+};
+layout(set = 0, binding = 1) uniform ArgonUser { vec4 _user[16]; };
+layout(set = 0, binding = 2) uniform texture2D _argonTex0;
+layout(set = 0, binding = 3) uniform sampler _argonSamp0;
+layout(set = 0, binding = 4) uniform texture2D _argonTex1;
+layout(set = 0, binding = 5) uniform sampler _argonSamp1;
+layout(set = 0, binding = 6) uniform texture2D _argonTex2;
+layout(set = 0, binding = 7) uniform sampler _argonSamp2;
+layout(set = 0, binding = 8) uniform texture2D _argonTex3;
+layout(set = 0, binding = 9) uniform sampler _argonSamp3;
+#define iChannel0 sampler2D(_argonTex0, _argonSamp0)
+#define iChannel1 sampler2D(_argonTex1, _argonSamp1)
+#define iChannel2 sampler2D(_argonTex2, _argonSamp2)
+#define iChannel3 sampler2D(_argonTex3, _argonSamp3)
+#define iChannelResolution(i) (_iChannelRes[i].xyz)
+#define iCount uvec3(iOffset.xyz)
+#define texture(s, uv) textureLod(s, vec2((uv).x, 1.0 - (uv).y), 0.0)
+"#;
+
+/// Storage buffer declarations live in bind group 1 (group 0 is Argon's).
+/// Add `set = 1` where the user did not say, and in fragment shaders make
+/// buffers `readonly` (fragment shaders may read buffers, not write them).
+fn rewrite_buffer_layouts(body: &str, stage: Stage) -> String {
+    let mut out = String::with_capacity(body.len() + 64);
+    for line in body.lines() {
+        let t = line.trim_start();
+        let is_buffer_decl = t.starts_with("layout") && (t.contains(" buffer ") || t.contains(")buffer ") || t.ends_with(" buffer") || t.contains(" buffer{"));
+        if is_buffer_decl {
+            let mut l = line.to_string();
+            if let Some(open) = l.find("layout(") {
+                let inner_start = open + "layout(".len();
+                let close = l[inner_start..].find(')').map(|c| c + inner_start).unwrap_or(l.len());
+                if !l[inner_start..close].contains("set") {
+                    l.insert_str(inner_start, "set = 1, ");
+                }
+            }
+            if stage == Stage::Fragment && !l.contains("readonly") && !l.contains("writeonly") {
+                if let Some(b) = l.find(" buffer") {
+                    l.insert_str(b, " readonly");
+                }
+            }
+            out.push_str(&l);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Hoist `uniform TYPE name;` declarations out of the user source into
 /// `#define`s onto the `_user` array. Lines are replaced by blank lines so
 /// line numbers stay meaningful.
@@ -175,7 +261,8 @@ fn preprocess(user: &str) -> Result<(String, String, Vec<UserUniform>), ShaderEr
     let mut body = String::with_capacity(user.len());
     let mut uniforms = Vec::new();
     for (i, line) in user.lines().enumerate() {
-        let t = line.trim();
+        // Ignore a trailing // comment: `uniform float speed; // units/s`.
+        let t = line.split("//").next().unwrap_or("").trim();
         if let Some(rest) = t.strip_prefix("uniform ") {
             let rest = rest.trim_end_matches(';').trim();
             let mut parts = rest.split_whitespace();
@@ -234,12 +321,35 @@ pub fn compile(user: &str) -> Result<Arc<CompiledShader>, ShaderError> {
     if !user.contains("mainImage") {
         return Err(ShaderError { line: None, message: "shader must define void mainImage(out vec4 fragColor, in vec2 fragCoord)".to_string() });
     }
+    compile_stage(user, Stage::Fragment)
+}
+
+/// Compile a compute shader: `layout(local_size_x = N) in;`, storage
+/// buffers declared with `layout(std430, binding = k) buffer`, and
+/// `void main()`. `gl_GlobalInvocationID` indexes the work; `iCount` is the
+/// count passed to `dispatch`.
+pub fn compile_compute(user: &str) -> Result<Arc<CompiledShader>, ShaderError> {
+    if !user.contains("local_size_x") {
+        return Err(ShaderError { line: None, message: "compute shader must declare its workgroup size, e.g. layout(local_size_x = 256) in;".to_string() });
+    }
+    if !user.contains("main") {
+        return Err(ShaderError { line: None, message: "compute shader must define void main()".to_string() });
+    }
+    compile_stage(user, Stage::Compute)
+}
+
+fn compile_stage(user: &str, stage: Stage) -> Result<Arc<CompiledShader>, ShaderError> {
     let (defines, body, uniforms) = preprocess(user)?;
-    let prelude_lines = PRELUDE.lines().count() + defines.lines().count();
-    let source = format!("{PRELUDE}{defines}{body}{POSTLUDE}");
+    let body = rewrite_buffer_layouts(&body, stage);
+    let (prelude, postlude, naga_stage) = match stage {
+        Stage::Fragment => (PRELUDE, POSTLUDE, naga::ShaderStage::Fragment),
+        Stage::Compute => (COMPUTE_PRELUDE, "", naga::ShaderStage::Compute),
+    };
+    let prelude_lines = prelude.lines().count() + defines.lines().count();
+    let source = format!("{prelude}{defines}{body}{postlude}");
 
     let mut frontend = naga::front::glsl::Frontend::default();
-    let options = naga::front::glsl::Options::from(naga::ShaderStage::Fragment);
+    let options = naga::front::glsl::Options::from(naga_stage);
     let module = frontend.parse(&options, &source).map_err(|errs| {
         let first = errs.errors.first();
         let line = first.and_then(|e| e.meta.to_range()).map(|r| line_of(&source, r.start));
@@ -252,7 +362,26 @@ pub fn compile(user: &str) -> Result<Arc<CompiledShader>, ShaderError> {
             let line = e.spans().next().and_then(|(span, _)| span.to_range()).map(|r| line_of(&source, r.start));
             ShaderError { line: user_line(line, prelude_lines), message: clean_message(&e.as_inner().to_string()) }
         })?;
-    Ok(Arc::new(CompiledShader { module, info, uniforms, source }))
+
+    // Reflect storage buffers (group 1) and the workgroup size.
+    let mut buffers = Vec::new();
+    for (_, g) in module.global_variables.iter() {
+        if let (naga::AddressSpace::Storage { access }, Some(b)) = (g.space, g.binding.as_ref()) {
+            if b.group != 1 {
+                return Err(ShaderError { line: None, message: format!("storage buffers must use set 1 (found set {})", b.group) });
+            }
+            if b.binding as usize >= MAX_BUFFERS {
+                return Err(ShaderError { line: None, message: format!("buffer binding {} out of range (0 to {})", b.binding, MAX_BUFFERS - 1) });
+            }
+            buffers.push(BufferBinding { binding: b.binding, writable: access.contains(naga::StorageAccess::STORE) });
+        }
+    }
+    buffers.sort_by_key(|b| b.binding);
+    if buffers.windows(2).any(|w| w[0].binding == w[1].binding) {
+        return Err(ShaderError { line: None, message: "two buffers share a binding number".to_string() });
+    }
+    let workgroup_size = module.entry_points.first().map(|e| e.workgroup_size).unwrap_or([0; 3]);
+    Ok(Arc::new(CompiledShader { module, info, uniforms, stage, buffers, workgroup_size, source }))
 }
 
 fn line_of(src: &str, byte: usize) -> u32 {
@@ -369,6 +498,52 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         assert!(e.message.to_lowercase().contains("badname"), "{e:?}");
         let e2 = compile("void main() {}").unwrap_err();
         assert!(e2.message.contains("mainImage"));
+    }
+
+    #[test]
+    fn compute_shaders_reflect_buffers_and_workgroups() {
+        let sh = compile_compute(
+            r#"
+layout(local_size_x = 16, local_size_y = 16) in;
+uniform float feed;
+layout(std430, binding = 0) readonly buffer A { vec2 a[]; };
+layout(std430, binding = 1) buffer B { vec2 b[]; };
+void main() {
+    uvec2 g = gl_GlobalInvocationID.xy;
+    uint i = g.y * iCount.x + g.x;
+    if (i >= uint(b.length())) return;
+    b[i] = a[i] * feed + vec2(iTime);
+}"#,
+        )
+        .unwrap();
+        assert_eq!(sh.stage, Stage::Compute);
+        assert_eq!(sh.workgroup_size, [16, 16, 1]);
+        assert_eq!(sh.buffers, vec![BufferBinding { binding: 0, writable: false }, BufferBinding { binding: 1, writable: true }]);
+        assert_eq!(sh.uniforms.len(), 1);
+        assert!(compile_compute("void main() {}").unwrap_err().message.contains("local_size_x"));
+        // Trailing comments on uniform lines are fine.
+        let sh = compile_compute("layout(local_size_x = 1) in;\nuniform float pull;   // +1 attract\nuniform vec2 at; // px\nvoid main() { float x = pull + at.x; }").unwrap();
+        assert_eq!(sh.uniforms.iter().map(|u| u.name.as_str()).collect::<Vec<_>>(), vec!["pull", "at"]);
+    }
+
+    #[test]
+    fn fragment_shaders_read_buffers() {
+        let sh = compile(
+            r#"
+layout(std430, binding = 0) buffer Cells { vec2 c[]; };
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    fragColor = vec4(c[uint(fragCoord.x)], 0.0, 1.0);
+}"#,
+        )
+        .unwrap();
+        // Made readonly automatically.
+        assert_eq!(sh.buffers, vec![BufferBinding { binding: 0, writable: false }]);
+    }
+
+    #[test]
+    fn compute_errors_point_at_user_lines() {
+        let e = compile_compute("layout(local_size_x = 64) in;\nvoid main() {\n    float x = nope;\n}").unwrap_err();
+        assert_eq!(e.line, Some(3), "{e:?}");
     }
 
     #[test]

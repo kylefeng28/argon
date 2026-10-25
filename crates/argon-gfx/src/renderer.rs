@@ -1,6 +1,6 @@
 use crate::atlas::{Atlas, FontMode, Fonts};
-use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, ShaderId, ShaderInputs, SpriteOpts};
-use argon_core::shader::{bytemuck_lite, ShaderGlobals, MAX_USER_UNIFORMS};
+use argon_core::draw::{BlendMode, BufferId, DrawCmd, ImageId, PointsOpts, Rect, ShaderId, ShaderInputs, SpriteOpts};
+use argon_core::shader::{bytemuck_lite, BufferBinding, ShaderGlobals, Stage, MAX_USER_UNIFORMS};
 use argon_core::raster::{self, Span};
 use argon_core::{Color, TextGrid, CELL_H, CELL_W};
 use std::collections::HashMap;
@@ -32,6 +32,15 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
 }
 
+impl Drop for Gpu {
+    /// Drain queued GPU work before the queue is destroyed. wgpu-core only
+    /// waits a bounded time on drop and panics if heavy frames (a 1M-point
+    /// draw on a software rasterizer) are still in flight.
+    fn drop(&mut self) {
+        let _ = self.device.poll(wgpu::Maintain::Wait);
+    }
+}
+
 impl Gpu {
     /// Create a device. `compatible_surface` steers adapter selection when
     /// presenting to a window; `None` for headless.
@@ -55,12 +64,18 @@ impl Gpu {
             &wgpu::DeviceDescriptor {
                 label: Some("argon"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+                // Everything the adapter offers: large storage buffers and
+                // full compute limits are what make big simulations possible.
+                required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
         ))
         .map_err(|e| e.to_string())?;
+        // In release builds a bad draw from a program must not take the whole
+        // console down (NFR-7): log GPU validation errors instead of panicking.
+        #[cfg(not(debug_assertions))]
+        device.on_uncaptured_error(Box::new(|e| log::error!("GPU error: {e}")));
         Ok(Gpu { instance, adapter, device, queue })
     }
 }
@@ -81,11 +96,21 @@ enum TexKey {
     SaveScreen,
     /// Not a draw: copy saved buffer -> framebuffer.
     RestoreScreen,
+    /// Not a draw: run compute dispatch #n (between render passes).
+    Dispatch(u32),
+    /// A draw_points call (#n in `point_draws`); drawn inside a render pass.
+    Points(u32),
 }
 
 impl TexKey {
+    /// Work that runs outside render passes.
     fn is_marker(self) -> bool {
-        matches!(self, TexKey::SaveScreen | TexKey::RestoreScreen)
+        matches!(self, TexKey::SaveScreen | TexKey::RestoreScreen | TexKey::Dispatch(_))
+    }
+
+    /// Batches that mean something even with no vertices.
+    fn is_special(self) -> bool {
+        self.is_marker() || matches!(self, TexKey::Points(_))
     }
 }
 
@@ -108,11 +133,30 @@ struct ShaderDraw {
     inputs: ShaderInputs,
     /// None = whole target.
     rect: Option<Rect>,
+    /// Compute dispatches: the invocation count (exposed as iCount).
+    count: Option<[u32; 3]>,
+}
+
+struct DispatchRec {
+    draw: usize,
+    groups: [u32; 3],
+}
+
+struct PointDraw {
+    buffer: BufferId,
+    colors: Option<BufferId>,
+    count: u32,
 }
 
 struct GpuShader {
     module: wgpu::ShaderModule,
     pipelines: HashMap<(BlendMode, wgpu::TextureFormat), wgpu::RenderPipeline>,
+    /// Storage buffers the shader declares, and the layouts that include them.
+    buffers: Vec<BufferBinding>,
+    set1: Option<wgpu::BindGroupLayout>,
+    layout: Option<wgpu::PipelineLayout>,
+    compute: Option<wgpu::ComputePipeline>,
+    workgroup: [u32; 3],
 }
 
 /// Uniform buffers for one shader draw; reused across frames.
@@ -221,6 +265,17 @@ pub struct Renderer {
     shader_layout: wgpu::PipelineLayout,
     shader_draws: Vec<ShaderDraw>,
     shader_slots: Vec<ShaderSlot>,
+    /// Program storage buffers (compute data).
+    gbuffers: HashMap<BufferId, wgpu::Buffer>,
+    dispatches: Vec<DispatchRec>,
+    point_draws: Vec<PointDraw>,
+    point_slots: Vec<wgpu::Buffer>,
+    point_shader: wgpu::ShaderModule,
+    point_bgl: wgpu::BindGroupLayout,
+    point_layout: wgpu::PipelineLayout,
+    point_pipelines: HashMap<BlendMode, wgpu::RenderPipeline>,
+    /// 16-byte storage buffer bound when draw_points has no colors.
+    dummy_storage: wgpu::Buffer,
     /// 1x1 black texture bound to unused channels.
     black: TexBundle,
     vbuf: wgpu::Buffer,
@@ -235,7 +290,20 @@ pub struct Renderer {
     pub clear_color: Color,
 }
 
+impl Drop for Renderer {
+    /// Let in-flight frames finish before the buffers, pipelines and bind
+    /// groups they use are released.
+    fn drop(&mut self) {
+        self.wait_idle();
+    }
+}
+
 impl Renderer {
+    /// Block until every submitted frame has finished on the GPU.
+    pub fn wait_idle(&self) {
+        let _ = self.gpu.device.poll(wgpu::Maintain::Wait);
+    }
+
     pub fn new(gpu: Arc<Gpu>, width: u32, height: u32) -> Renderer {
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -341,13 +409,13 @@ impl Renderer {
         let mut shader_entries = vec![
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                 count: None,
             },
@@ -355,7 +423,7 @@ impl Renderer {
         for c in 0..4u32 {
             shader_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: 2 + c * 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -365,7 +433,7 @@ impl Renderer {
             });
             shader_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: 3 + c * 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             });
@@ -379,6 +447,40 @@ impl Renderer {
             label: Some("argon-shader"),
             bind_group_layouts: &[&shader_bgl],
             push_constant_ranges: &[],
+        });
+        let point_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("argon-points"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("points.wgsl").into()),
+        });
+        let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let point_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("argon-points"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                storage_ro(1),
+                storage_ro(2),
+            ],
+        });
+        let point_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("argon-points"),
+            bind_group_layouts: &[&point_bgl],
+            push_constant_ranges: &[],
+        });
+        let dummy_storage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dummy-storage"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
         });
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("verts"),
@@ -418,6 +520,15 @@ impl Renderer {
             shader_layout,
             shader_draws: Vec::new(),
             shader_slots: Vec::new(),
+            gbuffers: HashMap::new(),
+            dispatches: Vec::new(),
+            point_draws: Vec::new(),
+            point_slots: Vec::new(),
+            point_shader,
+            point_bgl,
+            point_layout,
+            point_pipelines: HashMap::new(),
+            dummy_storage,
             black,
             vbuf,
             verts: Vec::new(),
@@ -528,6 +639,7 @@ impl Renderer {
         self.state = DrawState::default();
         self.images.clear();
         self.shaders.clear();
+        self.gbuffers.clear();
     }
 
     pub fn clear_framebuffer(&mut self, color: Color) {
@@ -590,7 +702,7 @@ impl Renderer {
             if last.tex == tex && last.blend == st.blend && last.target == st.target && last.clip == st.clip && last.shader == st.shader {
                 return;
             }
-            if last.start == last.end && !last.tex.is_marker() {
+            if last.start == last.end && !last.tex.is_special() {
                 // Empty batch: just retarget it.
                 *last = Batch { target: st.target, blend: st.blend, clip: st.clip, tex, shader: st.shader, start, end: start };
                 return;
@@ -667,11 +779,112 @@ impl Renderer {
             }
             DrawCmd::SetLineWidth(w) => self.state.line_width = (*w).max(1),
             DrawCmd::CreateShader { id, shader } => {
-                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                let device = &self.gpu.device;
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("argon-user-shader"),
                     source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(shader.module.clone())),
                 });
-                self.shaders.insert(*id, GpuShader { module, pipelines: HashMap::new() });
+                // Group 1 holds the shader's storage buffers, if any.
+                let (set1, layout) = if shader.buffers.is_empty() {
+                    (None, None)
+                } else {
+                    let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
+                        .buffers
+                        .iter()
+                        .map(|b| wgpu::BindGroupLayoutEntry {
+                            binding: b.binding,
+                            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: !b.writable },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        })
+                        .collect();
+                    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("argon-buffers"), entries: &entries });
+                    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("argon-shader-buffers"),
+                        bind_group_layouts: &[&self.shader_bgl, &bgl],
+                        push_constant_ranges: &[],
+                    });
+                    (Some(bgl), Some(pl))
+                };
+                let compute = (shader.stage == Stage::Compute).then(|| {
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("argon-compute"),
+                        layout: Some(layout.as_ref().unwrap_or(&self.shader_layout)),
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    })
+                });
+                self.shaders.insert(
+                    *id,
+                    GpuShader {
+                        module,
+                        pipelines: HashMap::new(),
+                        buffers: shader.buffers.clone(),
+                        set1,
+                        layout,
+                        compute,
+                        workgroup: shader.workgroup_size,
+                    },
+                );
+            }
+            DrawCmd::CreateBuffer { id, bytes } => {
+                let limits = self.gpu.device.limits();
+                let max = limits.max_buffer_size.min(limits.max_storage_buffer_binding_size as u64);
+                let size = (bytes.div_ceil(4) * 4).max(16);
+                if size > max {
+                    log::error!("buffer of {size} bytes exceeds this GPU's limit of {max} bytes");
+                    return;
+                }
+                let buf = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("argon-buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                self.gbuffers.insert(*id, buf);
+            }
+            DrawCmd::DestroyBuffer(id) => {
+                self.gbuffers.remove(id);
+            }
+            DrawCmd::WriteBuffer { id, offset, data } => {
+                if let Some(b) = self.gbuffers.get(id) {
+                    let end = offset + data.len() as u64;
+                    if end <= b.size() && offset % 4 == 0 && data.len() % 4 == 0 && !data.is_empty() {
+                        self.gpu.queue.write_buffer(b, *offset, data);
+                    } else {
+                        log::error!("write_buffer out of range or misaligned ({offset}+{} > {})", data.len(), b.size());
+                    }
+                }
+            }
+            DrawCmd::Dispatch { id, count, inputs } => {
+                let Some(gs) = self.shaders.get(id) else { return };
+                if gs.compute.is_none() {
+                    return;
+                }
+                let wg = gs.workgroup;
+                let groups = [0, 1, 2].map(|k| count[k].max(1).div_ceil(wg[k].max(1)));
+                let max_groups = self.gpu.device.limits().max_compute_workgroups_per_dimension;
+                if groups.iter().any(|g| *g > max_groups) {
+                    log::error!("dispatch of {count:?} needs {groups:?} workgroups (max {max_groups} per dimension)");
+                    return;
+                }
+                self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: None, count: Some(*count) });
+                self.dispatches.push(DispatchRec { draw: self.shader_draws.len() - 1, groups });
+                let k = self.dispatches.len() as u32 - 1;
+                let start = self.verts.len() as u32;
+                self.batches.push(Batch { target: None, blend: self.state.blend, clip: None, tex: TexKey::Dispatch(k), shader: None, start, end: start });
+            }
+            DrawCmd::DrawPoints { buffer, opts } => {
+                if !self.gbuffers.contains_key(buffer) {
+                    return;
+                }
+                self.record_points(*buffer, opts);
             }
             DrawCmd::DestroyShader(id) => {
                 self.shaders.remove(id);
@@ -679,7 +892,7 @@ impl Renderer {
             DrawCmd::SetShader { id, inputs } => {
                 self.state.shader = match id {
                     Some(id) if self.shaders.contains_key(id) => {
-                        self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: None });
+                        self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: None, count: None });
                         Some(self.shader_draws.len() - 1)
                     }
                     _ => None,
@@ -691,7 +904,7 @@ impl Renderer {
                 }
                 let (tw, th) = self.target_size();
                 let r = rect.unwrap_or(Rect::new(0.0, 0.0, tw as f32, th as f32));
-                self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: Some(r) });
+                self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: Some(r), count: None });
                 let saved = self.state.shader;
                 self.state.shader = Some(self.shader_draws.len() - 1);
                 self.begin_batch(TexKey::Atlas);
@@ -856,6 +1069,8 @@ impl Renderer {
         self.verts.clear();
         self.batches.clear();
         self.shader_draws.clear();
+        self.dispatches.clear();
+        self.point_draws.clear();
         // A set_shader left active from last frame stays active, but its
         // inputs were recorded in last frame's list; drop it to be safe.
         self.state.shader = None;
@@ -895,7 +1110,10 @@ impl Renderer {
         let mut i = 0;
         while i < program_batches.len() {
             if program_batches[i].tex.is_marker() {
-                self.screen_copy(&mut enc, program_batches[i].tex == TexKey::SaveScreen);
+                match program_batches[i].tex {
+                    TexKey::Dispatch(k) => self.encode_dispatch(&mut enc, k as usize),
+                    tex => self.screen_copy(&mut enc, tex == TexKey::SaveScreen),
+                }
                 i += 1;
                 continue;
             }
@@ -905,16 +1123,25 @@ impl Renderer {
                 j += 1;
             }
             // Pipelines and bind groups must exist before we borrow views.
-            let mut shader_bgs: HashMap<usize, Option<wgpu::BindGroup>> = HashMap::new();
+            let mut shader_bgs: HashMap<usize, (Option<wgpu::BindGroup>, Option<wgpu::BindGroup>)> = HashMap::new();
+            let mut point_bgs: HashMap<u32, wgpu::BindGroup> = HashMap::new();
             for b in &program_batches[i..j] {
+                if let TexKey::Points(k) = b.tex {
+                    self.point_pipeline(b.blend);
+                    if let Some(bg) = self.point_bind_group(k as usize) {
+                        point_bgs.insert(k, bg);
+                    }
+                    continue;
+                }
                 match b.shader {
                     None => {
                         self.pipeline(b.blend, FB_FORMAT);
                     }
                     Some(sd) => {
                         self.shader_pipeline(sd, b.blend, FB_FORMAT);
-                        let bg = self.shader_bind_group(sd, b.tex, target);
-                        shader_bgs.insert(sd, bg);
+                        let bg0 = self.shader_bind_group(sd, b.tex, target);
+                        let bg1 = self.buffer_bind_group(sd);
+                        shader_bgs.insert(sd, (bg0, bg1));
                     }
                 }
             }
@@ -940,7 +1167,11 @@ impl Renderer {
                 });
                 pass.set_vertex_buffer(0, self.vbuf.slice(..));
                 for b in &program_batches[i..j] {
-                    if b.start == b.end {
+                    let points = match b.tex {
+                        TexKey::Points(k) => Some(k),
+                        _ => None,
+                    };
+                    if b.start == b.end && points.is_none() {
                         continue;
                     }
                     let (sx, sy, sw, sh) = clip_to_scissor(b.clip, tsz);
@@ -948,6 +1179,15 @@ impl Renderer {
                         continue;
                     }
                     pass.set_scissor_rect(sx, sy, sw, sh);
+                    if let Some(k) = points {
+                        let (Some(p), Some(bg)) = (self.point_pipelines.get(&b.blend), point_bgs.get(&k)) else { continue };
+                        pass.set_pipeline(p);
+                        pass.set_bind_group(0, bg, &[]);
+                        pass.draw(0..6, 0..self.point_draws[k as usize].count);
+                        // The batch loop reuses the vertex buffer; rebind it.
+                        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+                        continue;
+                    }
                     match b.shader {
                         None => {
                             let Some(bg) = self.bind_group(b.tex) else { continue };
@@ -955,11 +1195,18 @@ impl Renderer {
                             pass.set_bind_group(0, bg, &[]);
                         }
                         Some(sd) => {
-                            let Some(Some(bg)) = shader_bgs.get(&sd) else { continue };
+                            let Some((Some(bg0), bg1)) = shader_bgs.get(&sd) else { continue };
                             let id = self.shader_draws[sd].id;
-                            let Some(p) = self.shaders.get(&id).and_then(|g| g.pipelines.get(&(b.blend, FB_FORMAT))) else { continue };
+                            let Some(gs) = self.shaders.get(&id) else { continue };
+                            let Some(p) = gs.pipelines.get(&(b.blend, FB_FORMAT)) else { continue };
+                            if gs.set1.is_some() && bg1.is_none() {
+                                continue;
+                            }
                             pass.set_pipeline(p);
-                            pass.set_bind_group(0, bg, &[]);
+                            pass.set_bind_group(0, bg0, &[]);
+                            if let Some(bg1) = bg1 {
+                                pass.set_bind_group(1, bg1, &[]);
+                            }
                         }
                     }
                     pass.draw(b.start..b.end, 0..1);
@@ -1004,10 +1251,14 @@ impl Renderer {
         if gs.pipelines.contains_key(&(blend, format)) {
             return;
         }
+        if gs.compute.is_some() {
+            return;
+        }
         let blend_state = blend_state_for(blend);
+        let layout = gs.layout.as_ref().unwrap_or(&self.shader_layout);
         let p = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("argon-user-shader"),
-            layout: Some(&self.shader_layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState {
                 module: &self.shader_vs,
                 entry_point: Some("main"),
@@ -1047,9 +1298,10 @@ impl Renderer {
         }
         for (i, d) in self.shader_draws.iter().enumerate() {
             let (tw, th) = (self.width, self.height);
-            let (res, off) = match d.rect {
-                Some(r) => ([r.w, r.h, 1.0], [r.x, r.y, 0.0, 0.0]),
-                None => ([tw as f32, th as f32, 1.0], [0.0; 4]),
+            let (res, off) = match (d.rect, d.count) {
+                (_, Some(c)) => ([tw as f32, th as f32, 1.0], [c[0] as f32, c[1] as f32, c[2] as f32, 0.0]),
+                (Some(r), None) => ([r.w, r.h, 1.0], [r.x, r.y, 0.0, 0.0]),
+                (None, None) => ([tw as f32, th as f32, 1.0], [0.0; 4]),
             };
             let mut chres = [[0.0f32; 4]; 4];
             for (c, ch) in d.inputs.channels.iter().enumerate() {
@@ -1102,6 +1354,147 @@ impl Renderer {
             entries.push(wgpu::BindGroupEntry { binding: 3 + c as u32 * 2, resource: wgpu::BindingResource::Sampler(&self.sampler) });
         }
         Some(self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("argon-shader"), layout: &self.shader_bgl, entries: &entries }))
+    }
+
+    /// Bind group 1 (storage buffers) for a shader draw or dispatch. None if
+    /// the shader has no buffers or one of its bindings is not supplied.
+    fn buffer_bind_group(&self, draw: usize) -> Option<wgpu::BindGroup> {
+        let d = &self.shader_draws[draw];
+        let gs = self.shaders.get(&d.id)?;
+        let bgl = gs.set1.as_ref()?;
+        let mut entries = Vec::with_capacity(gs.buffers.len());
+        for b in &gs.buffers {
+            let Some(buf) = d.inputs.buffers.get(b.binding as usize).copied().flatten().and_then(|id| self.gbuffers.get(&id)) else {
+                log::error!("shader buffer binding {} has no buffer", b.binding);
+                return None;
+            };
+            entries.push(wgpu::BindGroupEntry { binding: b.binding, resource: buf.as_entire_binding() });
+        }
+        Some(self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("argon-buffers"), layout: bgl, entries: &entries }))
+    }
+
+    /// Run compute dispatch #k in its own compute pass.
+    fn encode_dispatch(&mut self, enc: &mut wgpu::CommandEncoder, k: usize) {
+        let Some(rec) = self.dispatches.get(k) else { return };
+        let (draw, groups) = (rec.draw, rec.groups);
+        let id = self.shader_draws[draw].id;
+        let Some(bg0) = self.shader_bind_group(draw, TexKey::Dispatch(0), None) else { return };
+        let bg1 = self.buffer_bind_group(draw);
+        let Some(gs) = self.shaders.get(&id) else { return };
+        let Some(pipeline) = gs.compute.as_ref() else { return };
+        if gs.set1.is_some() && bg1.is_none() {
+            return;
+        }
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("argon-dispatch"), timestamp_writes: None });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bg0, &[]);
+        if let Some(bg1) = &bg1 {
+            pass.set_bind_group(1, bg1, &[]);
+        }
+        pass.dispatch_workgroups(groups[0], groups[1], groups[2]);
+    }
+
+    /// Queue a draw_points call: write its parameters and add a batch.
+    fn record_points(&mut self, buffer: BufferId, opts: &PointsOpts) {
+        let (tw, th) = self.target_size();
+        let k = self.point_draws.len();
+        if self.point_slots.len() <= k {
+            self.point_slots.push(self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("points-params"),
+                size: 48,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        // Never read past the end of the position buffer.
+        let floats = self.gbuffers.get(&buffer).map(|b| b.size() / 4).unwrap_or(0);
+        let stride = opts.stride.max(2);
+        let mut count = opts.count.min((floats / stride as u64) as u32);
+        let colors = opts.colors.filter(|c| self.gbuffers.contains_key(c));
+        if let Some(c) = colors {
+            let cfloats = self.gbuffers[&c].size() / 4;
+            count = count.min((cfloats / 4) as u32);
+        }
+        let c = opts.color.to_f32();
+        let mut params = [0u8; 48];
+        let mut put = |off: usize, bytes: [u8; 4]| params[off..off + 4].copy_from_slice(&bytes);
+        put(0, (tw as f32).to_le_bytes());
+        put(4, (th as f32).to_le_bytes());
+        put(8, self.state.camera.0.to_le_bytes());
+        put(12, self.state.camera.1.to_le_bytes());
+        for (i, v) in c.iter().enumerate() {
+            put(16 + i * 4, v.to_le_bytes());
+        }
+        put(32, opts.size.max(1.0).to_le_bytes());
+        put(36, stride.to_le_bytes());
+        put(40, (colors.is_some() as u32).to_le_bytes());
+        self.gpu.queue.write_buffer(&self.point_slots[k], 0, &params);
+        self.point_draws.push(PointDraw { buffer, colors, count });
+        let st = self.state;
+        let start = self.verts.len() as u32;
+        self.batches.push(Batch { target: st.target, blend: st.blend, clip: st.clip, tex: TexKey::Points(k as u32), shader: None, start, end: start });
+    }
+
+    fn point_pipeline(&mut self, blend: BlendMode) {
+        if self.point_pipelines.contains_key(&blend) {
+            return;
+        }
+        let p = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("argon-points"),
+            layout: Some(&self.point_layout),
+            vertex: wgpu::VertexState { module: &self.point_shader, entry_point: Some("vs_main"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.point_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState { format: FB_FORMAT, blend: Some(blend_state_for(blend)), write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.point_pipelines.insert(blend, p);
+    }
+
+    fn point_bind_group(&self, k: usize) -> Option<wgpu::BindGroup> {
+        let d = self.point_draws.get(k)?;
+        let pos = self.gbuffers.get(&d.buffer)?;
+        let cols = d.colors.and_then(|c| self.gbuffers.get(&c)).unwrap_or(&self.dummy_storage);
+        Some(self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("argon-points"),
+            layout: &self.point_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.point_slots[k].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: pos.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: cols.as_entire_binding() },
+            ],
+        }))
+    }
+
+    /// Read a storage buffer back (blocking; for tests and slow-path tools).
+    pub fn read_buffer(&self, id: BufferId) -> Option<Vec<u8>> {
+        let src = self.gbuffers.get(&id)?;
+        let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("buffer-readback"),
+            size: src.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(src, 0, &staging, 0, src.size());
+        self.gpu.queue.submit([enc.finish()]);
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.gpu.device.poll(wgpu::Maintain::Wait);
+        rx.recv().ok()?.ok()?;
+        let out = slice.get_mapped_range().to_vec();
+        staging.unmap();
+        Some(out)
     }
 
     /// Alt screen support: copy the framebuffer to the saved buffer or back.
@@ -1173,7 +1566,7 @@ impl Renderer {
         match key {
             TexKey::Atlas => Some(&self.atlas_tex.bind_group),
             TexKey::Image(id) => self.images.get(&id).map(|t| &t.bind_group),
-            TexKey::SaveScreen | TexKey::RestoreScreen => None,
+            TexKey::SaveScreen | TexKey::RestoreScreen | TexKey::Dispatch(_) | TexKey::Points(_) => None,
         }
     }
 

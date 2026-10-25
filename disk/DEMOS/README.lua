@@ -29,6 +29,8 @@ local lines = {
   "  RUN mandelbrot_gpu / julia_gpu   fractals as GLSL shaders",
   "  RUN raymarch    a Shadertoy-style SDF scene",
   "  RUN shaderfx    post-processing and sprite shaders",
+  "  RUN particles_gpu       1,000,000 particles (compute)",
+  "  RUN reaction_diffusion  Gray-Scott patterns (compute)",
   "  CD shadertoy    .glsl files run directly: RUN name",
   "",
   "DEMOS is read-only. To make your own version:",
