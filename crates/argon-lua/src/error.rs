@@ -136,6 +136,11 @@ fn hint_for(message: &str, source_line: Option<&str>, api: &ApiTable) -> Option<
     if let Some(i) = message.find("global '") {
         let rest = &message[i + 8..];
         let name = rest.split('\'').next()?;
+        if let Some(s) = api.suggest(name) {
+            if s != name {
+                return Some(format!("Did you mean {s}?"));
+            }
+        }
         return Some(format!("'{name}' is not defined. Type HELP for the list of functions."));
     }
     // Luau does not name the variable; look at the source line for calls to
@@ -145,6 +150,9 @@ fn hint_for(message: &str, source_line: Option<&str>, api: &ApiTable) -> Option<
         for name in called_identifiers(line) {
             if api.get(&name).is_some() || LUA_KEYWORDS.contains(&name.as_str()) {
                 continue;
+            }
+            if let Some(s) = api.suggest(&name) {
+                return Some(format!("Did you mean {s}?"));
             }
         }
     }

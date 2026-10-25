@@ -180,7 +180,10 @@ impl Console {
     }
 
     fn prompt_text(&self) -> String {
-        "ARGON> ".to_string()
+        return match self.cwd.is_empty() {
+            true => "ARGON> ".to_string(),
+            false => format!("ARGON:{}> ", self.cwd.replace('/', "\\").to_ascii_uppercase()),
+        };
     }
 
     // ----- input ----------------------------------------------------------------------
@@ -326,15 +329,38 @@ impl Console {
                     self.print(&l);
                 }
             }
+            ShellCmd::Ver => {
+                let v = format!("Argon {} (Luau, api 1)", argon_core::VERSION);
+                self.print(&v);
+            }
             ShellCmd::Exit => self.quit = true,
 
+            ShellCmd::Cd(dir) => self.cmd_cd(dir),
             ShellCmd::Dir(pat) => self.cmd_dir(pat.as_deref()),
+            ShellCmd::Type(name) => self.cmd_type(name),
             ShellCmd::Run(name) => self.cmd_run(name),
             ShellCmd::Lua(src) => if let Some(src) = src {
                 if !src.trim().is_empty() {
                     self.eval_lua(&src);
                 }
             }
+
+            ShellCmd::Mkdir(dir) => self.cmd_mkdir(dir),
+            ShellCmd::Copy(a, b) => self.cmd_copy(a, b),
+            ShellCmd::Ren(a, b) => self.cmd_ren(a, b),
+            ShellCmd::Del(name) => self.cmd_del(name),
+        }
+    }
+
+    fn resolve(&self, name: &str) -> Option<ProgramLocation> {
+        vfs::resolve_program(&self.disk, &self.cwd, name)
+    }
+
+    fn file_arg(&self, name: &str) -> String {
+        match self.resolve(name) {
+            Some(loc) if !loc.is_cart => loc.main,
+            Some(loc) => loc.dir,
+            None => self.disk.canonical_vpath(&vfs::join(&self.cwd, name)).unwrap_or_else(|| vfs::join(&self.cwd, name)),
         }
     }
 
@@ -372,15 +398,44 @@ impl Console {
         }
     }
 
+    fn cmd_cd(&mut self, dir: Option<String>) {
+        let target = match dir.as_deref() {
+            None | Some("/") | Some("\\") => String::new(),
+            Some("..") => vfs::parent(&self.cwd),
+            Some(d) => {
+                let d = d.replace('\\', "/");
+                match self.disk.canonical_vpath(&vfs::join(&self.cwd, d.trim_end_matches('/'))) {
+                    Some(p) => p,
+                    None => vfs::join(&self.cwd, &d),
+                }
+            }
+        };
+        if target.is_empty() || self.disk.is_dir(&target) {
+            self.cwd = target;
+        } else {
+            self.print_error(&format!("Folder not found: {}", dir.unwrap_or_default()));
+        }
+    }
+
     fn cmd_dir(&mut self, pattern: Option<&str>) {
-        let dir = match pattern {
-            None => self.cwd.clone(),
+        let (dir, pat) = match pattern {
+            None => (self.cwd.clone(), None),
             Some(p) => {
-                vfs::join(&self.cwd, p)
+                if p.contains('*') || p.contains('?') {
+                    match p.rfind('/') {
+                        Some(i) => (vfs::join(&self.cwd, &p[..i]), Some(p[i + 1..].to_string())),
+                        None => (self.cwd.clone(), Some(p.to_string())),
+                    }
+                } else {
+                    (vfs::join(&self.cwd, p), None)
+                }
             }
         };
         match self.disk.list(&dir) {
-            Ok(entries) => {
+            Ok(mut entries) => {
+                if let Some(p) = pat {
+                    entries.retain(|e| shell::wildcard_match(&p, &e.name) || shell::wildcard_match(&p, vfs::strip_lua_ext(&e.name)));
+                }
                 let header = format!(" Folder of \\{}", dir.replace('/', "\\").to_ascii_uppercase());
                 self.print(&header);
                 let cols = self.grid.cols();
@@ -392,8 +447,23 @@ impl Console {
         }
     }
 
-    fn resolve(&self, name: &str) -> Option<ProgramLocation> {
-        vfs::resolve_program(&self.disk, &self.cwd, name)
+    fn cmd_type(&mut self, name: Option<String>) {
+        let Some(name) = name else {
+            self.print_error("TYPE what? Usage: TYPE name");
+            return;
+        };
+        let path = match self.resolve(&name) {
+            Some(loc) => loc.main,
+            None => vfs::join(&self.cwd, &name),
+        };
+        match self.disk.read_string(&path) {
+            Ok(s) => {
+                for l in s.lines() {
+                    self.print(l);
+                }
+            }
+            Err(e) => self.print_error(&e.to_string()),
+        }
     }
 
     fn cmd_run(&mut self, name: Option<String>) {
@@ -452,6 +522,69 @@ impl Console {
         self.mode = Mode::Running;
         self.program_started = true;
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
+    }
+
+    fn cmd_mkdir(&mut self, dir: Option<String>) {
+        let Some(dir) = dir else {
+            self.print_error("Usage: MKDIR name");
+            return;
+        };
+        match self.disk.mkdir(&vfs::join(&self.cwd, &dir)) {
+            Ok(()) => self.print(&format!("Created {dir}.")),
+            Err(e) => self.print_error(&e.to_string()),
+        }
+    }
+
+    fn cmd_copy(&mut self, a: Option<String>, b: Option<String>) {
+        let (Some(a), Some(b)) = (a, b) else {
+            self.print_error("Usage: COPY from to");
+            return;
+        };
+        let from = self.file_arg(&a);
+        let mut to = vfs::join(&self.cwd, &b);
+        if from.ends_with(".lua") && !to.ends_with(".lua") && !self.disk.is_dir(&to) {
+            to.push_str(".lua");
+        }
+        if self.disk.is_dir(&to) {
+            to = vfs::join(&to, vfs::file_name(&from));
+        }
+        match self.disk.copy(&from, &to) {
+            Ok(()) => self.print(&format!("Copied {from} to {to}.")),
+            Err(e) => self.print_error(&e.to_string()),
+        }
+    }
+
+    fn cmd_ren(&mut self, a: Option<String>, b: Option<String>) {
+        let (Some(a), Some(b)) = (a, b) else {
+            self.print_error("Usage: REN from to");
+            return;
+        };
+        let from = self.file_arg(&a);
+        let mut to = vfs::join(&self.cwd, &b);
+        if from.ends_with(".lua") && !to.ends_with(".lua") {
+            to.push_str(".lua");
+        }
+        match self.disk.rename(&from, &to) {
+            Ok(()) => self.print(&format!("Renamed {from} to {to}.")),
+            Err(e) => self.print_error(&e.to_string()),
+        }
+    }
+
+    fn cmd_del(&mut self, name: Option<String>) {
+        let Some(name) = name else {
+            self.print_error("Usage: DEL name");
+            return;
+        };
+        let target = self.file_arg(&name);
+        if !self.disk.exists(&target) {
+            self.print_error(&format!("Not found: {name}"));
+            return;
+        }
+
+        match self.disk.delete(&target) {
+            Ok(()) => self.print(&format!("Deleted {target}.")),
+            Err(e) => self.print_error(&e.to_string()),
+        }
     }
 
     // ----- frame -----------------------------------------------------------------------------
@@ -735,13 +868,12 @@ mod tests {
         type_line(&mut c, "EVAL 2^10");
         assert!(c.screen_text().contains("1024"));
         type_line(&mut c, "help");
-        assert!(c.screen_text().contains("Available commands"));
+        assert!(c.screen_text().contains("Shell commands"));
         type_line(&mut c, "LUA fill_rect(10, 10, 5, 5)");
         let out = c.update(0.016);
         assert!(out.cmds.iter().any(|cmd| matches!(cmd, DrawCmd::Rect { .. })));
     }
 
-    /*
     #[test]
     fn dir_shows_demos_and_type_prints_file() {
         let (mut c, _d) = console();
@@ -752,7 +884,6 @@ mod tests {
         assert!(c.screen_text().contains("print('hi')"));
         assert!(c.screen_text().contains("ARGON:DEMOS>") || c.prompt_text().contains("DEMOS"));
     }
-    */
 
     #[test]
     fn run_program_to_completion_and_show_error() {
@@ -769,7 +900,7 @@ mod tests {
         pump(&mut c, 50);
         let t = c.screen_text();
         assert!(t.contains("ERROR in bad.lua:2"), "{t}");
-        // assert!(t.contains("Did you mean fill_rect?"), "{t}");
+        assert!(t.contains("Did you mean fill_rect?"), "{t}");
     }
 
     #[test]
@@ -816,6 +947,7 @@ mod tests {
         type_line(&mut c, "x");
         assert!(c.screen_text().lines().last().unwrap_or("").contains("nil") || c.screen_text().contains("nil"));
     }
+    */
 
     #[test]
     fn tab_completes_commands_and_files() {
@@ -832,5 +964,4 @@ mod tests {
         c.key(KeyEvent::press(KeyCode::Tab));
         assert_eq!(c.le.text, "run DEMOS/");
     }
-    */
 }

@@ -12,11 +12,19 @@ pub static COMMANDS: &[CommandDoc] = &[
     CommandDoc { name: "CLS", usage: "CLS", doc: "Clear the screen. Alias: CLEAR." },
     CommandDoc { name: "ECHO", usage: "ECHO [message]", doc: "Prints a message to the screen." },
     CommandDoc { name: "HELP", usage: "HELP [topic]", doc: "Help on a command, a function or a category (e.g. HELP draw)." },
+    CommandDoc { name: "VER", usage: "VER", doc: "Show the Argon version." },
     CommandDoc { name: "EXIT", usage: "EXIT", doc: "Quit Argon." },
 
+    CommandDoc { name: "CD", usage: "CD folder | CD .. | CD", doc: "Change folder. CD alone returns to the root." },
     CommandDoc { name: "DIR", usage: "DIR [pattern]", doc: "List programs and files in the current folder. Alias: LS." },
+    CommandDoc { name: "TYPE", usage: "TYPE name", doc: "Print a file to the screen. Alias: CAT" },
     CommandDoc { name: "RUN", usage: "RUN [name]", doc: "Run a program. With no name, re-runs the last one. Esc stops it." },
     CommandDoc { name: "LUA", usage: "LUA [name]", doc: "Evaluate a lua expression or command. Alias: EVAL." },
+
+    CommandDoc { name: "MKDIR", usage: "MKDIR name", doc: "Create a folder." },
+    CommandDoc { name: "COPY", usage: "COPY from to", doc: "Copy a file or folder. Alias: CP" },
+    CommandDoc { name: "REN", usage: "REN from to", doc: "Rename a file or folder. Alias: MV" },
+    CommandDoc { name: "DEL", usage: "DEL name", doc: "Delete a file or folder. Alias: RM" },
 ];
 
 pub fn command_doc(name: &str) -> Option<&'static CommandDoc> {

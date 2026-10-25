@@ -7,14 +7,23 @@ use argon_core::vfs::DirEntry;
 pub enum ShellCmd {
     NoOp,
     Unknown(String),
+
     Cls,
     Echo(Option<String>),
     Help(Option<String>),
+    Ver,
     Exit,
 
+    Cd(Option<String>),
     Dir(Option<String>),
+    Type(Option<String>),
     Run(Option<String>),
     Lua(Option<String>),
+
+    Mkdir(Option<String>),
+    Copy(Option<String>, Option<String>),
+    Ren(Option<String>, Option<String>),
+    Del(Option<String>),
 }
 
 /// Parse a line. Commands are case-insensitive.
@@ -27,19 +36,60 @@ pub fn parse(line: &str) -> ShellCmd {
     let word = parts.next().unwrap_or("");
     let rest = parts.next().map(|s| s.trim()).filter(|s| !s.is_empty());
     let one = || rest.map(|s| s.to_string());
+    let two = || -> (Option<String>, Option<String>) {
+        match rest {
+            None => (None, None),
+            Some(r) => {
+                let mut p = r.splitn(2, char::is_whitespace);
+                let a = p.next().map(|s| s.to_string());
+                let b = p.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                (a, b)
+            }
+        }
+    };
 
     match word.to_ascii_uppercase().as_str() {
         "CLS" => ShellCmd::Cls,
         "ECHO" => ShellCmd::Echo(one()),
         "HELP" => ShellCmd::Help(one()),
+        "VER" | "VERSION" => ShellCmd::Ver,
         "EXIT" => ShellCmd::Exit,
 
-        "RUN" => ShellCmd::Run(one()),
+        "CD" => ShellCmd::Cd(one()),
         "DIR" | "LS" => ShellCmd::Dir(one()),
+        "TYPE" | "CAT" => ShellCmd::Type(one()),
+        "RUN" => ShellCmd::Run(one()),
         "LUA" | "EVAL" => ShellCmd::Lua(one()),
+
+        "MKDIR" => ShellCmd::Mkdir(one()),
+        "COPY" | "CP" => {
+            let (a, b) = two();
+            ShellCmd::Copy(a, b)
+        }
+        "REN" | "RENAME" | "MV" => {
+            let (a, b) = two();
+            ShellCmd::Ren(a, b)
+        }
+        "DEL" | "RM" | "DELETE" => ShellCmd::Del(one()),
 
         _ => ShellCmd::Unknown(word.to_string()),
     }
+}
+
+/// DOS-style wildcard match (`*` and `?`), case-insensitive.
+pub fn wildcard_match(pattern: &str, name: &str) -> bool {
+    fn rec(p: &[char], n: &[char]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some('*'), _) => rec(&p[1..], n) || (!n.is_empty() && rec(p, &n[1..])),
+            (Some('?'), Some(_)) => rec(&p[1..], &n[1..]),
+            (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => rec(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    rec(&p, &n)
 }
 
 /// Format a directory listing.
@@ -102,5 +152,13 @@ mod tests {
         assert_eq!(parse("EVAL 2 + 2"), ShellCmd::Lua(Some("2 + 2".into())));
         assert_eq!(parse("LUA print('dir')"), ShellCmd::Lua(Some("print('dir')".into())));
         assert_eq!(parse("LUA x = 1"), ShellCmd::Lua(Some("x = 1".into())));
+    }
+
+    #[test]
+    fn wildcards() {
+        assert!(wildcard_match("*.lua", "pong.lua"));
+        assert!(wildcard_match("P?NG*", "pong.lua"));
+        assert!(!wildcard_match("*.png", "pong.lua"));
+        assert!(wildcard_match("*", "anything"));
     }
 }
