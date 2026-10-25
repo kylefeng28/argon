@@ -13,6 +13,7 @@ pub fn all() -> Vec<(&'static str, &'static str)> {
         demo!("bounce.lua"),
         demo!("chiptune.lua"),
         demo!("clock.lua"),
+        demo!("cube.lua"),
         demo!("guess.lua"),
         demo!("hello.lua"),
         demo!("matrix.lua"),
