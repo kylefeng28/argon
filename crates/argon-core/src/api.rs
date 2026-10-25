@@ -88,11 +88,39 @@ impl ApiTable {
         self.entries.iter().map(|e| e.name)
     }
 
+    /// Closest name by edit distance (<= 2), for "did you mean".
+    pub fn suggest(&self, name: &str) -> Option<&'static str> {
+        let mut best: Option<(usize, &'static str)> = None;
+        for e in &self.entries {
+            let d = levenshtein(name, e.name);
+            if d <= 2 && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, e.name));
+            }
+        }
+        best.map(|(_, n)| n)
+    }
+
     pub fn sorted(&self) -> Vec<&ApiEntry> {
         let mut v: Vec<&ApiEntry> = self.entries.iter().collect();
         v.sort_by_key(|e| e.name);
         v
     }
+}
+
+pub fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 /// Snippet placeholder parsing: returns the literal text and the byte ranges

@@ -3,6 +3,7 @@
 //! [`argon_core::TextGrid`] plus draw commands; no GPU code.
 
 pub mod console;
+pub mod help;
 pub mod lineedit;
 pub mod shell;
 

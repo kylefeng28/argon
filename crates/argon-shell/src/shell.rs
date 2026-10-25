@@ -9,7 +9,7 @@ pub enum ShellCmd {
     Unknown(String),
     Cls,
     Echo(Option<String>),
-    Help,
+    Help(Option<String>),
     Exit,
 
     Dir(Option<String>),
@@ -31,7 +31,7 @@ pub fn parse(line: &str) -> ShellCmd {
     match word.to_ascii_uppercase().as_str() {
         "CLS" => ShellCmd::Cls,
         "ECHO" => ShellCmd::Echo(one()),
-        "HELP" => ShellCmd::Help,
+        "HELP" => ShellCmd::Help(one()),
         "EXIT" => ShellCmd::Exit,
 
         "RUN" => ShellCmd::Run(one()),

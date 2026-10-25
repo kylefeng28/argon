@@ -1,7 +1,9 @@
 //! The console state machine: Shell <-> Editor <-> Running.
 
 use crate::lineedit::{LineAction, LineEdit};
+use crate::help;
 use crate::shell::{self, ShellCmd};
+use argon_core::api::ApiTable;
 use argon_core::config::{Config, Manifest, Paths};
 use argon_core::draw::DrawCmd;
 use argon_core::input::{InputState, KeyCode, KeyEvent};
@@ -76,6 +78,7 @@ pub struct Console {
     program: Option<Running>,
 
     disk: Jail,
+    api: ApiTable,
 }
 
 impl Console {
@@ -91,6 +94,9 @@ impl Console {
         let imm = new_immediate(&disk)?;
 
         let theme = &DEFAULT_THEME;
+        let history = std::fs::read_to_string(&paths.history)
+            .map(|s| s.lines().map(|l| l.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
         let mut grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
         grid.fg = theme.fg;
         grid.bg = None;
@@ -102,7 +108,7 @@ impl Console {
             grid,
             cmds: vec![DrawCmd::Clear(theme.bg)],
             mode: Mode::Shell,
-            le: LineEdit::new(),
+            le: LineEdit::with_history(history),
             resolution: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
             time: 0.0,
             quit: false,
@@ -114,6 +120,7 @@ impl Console {
             program_started: false,
             program: None,
             disk,
+            api: argon_lua::docs::api_table(),
         };
 
         c.banner();
@@ -215,13 +222,93 @@ impl Console {
                 let prompt = self.prompt_text();
                 self.grid.write(&format!("{prompt}{line}"));
                 self.grid.newline();
-                // self.le.push_history(&line);
+                self.le.push_history(&line);
+                self.save_history();
                 self.execute(&line);
             }
+            LineAction::Tab => self.complete(),
             LineAction::Cancel => {
                 self.le.clear();
             }
             _ => {}
+        }
+    }
+
+    // shell history
+    fn save_history(&self) {
+        let hist = self.le.history();
+        let start = hist.len().saturating_sub(200);
+        let _ = std::fs::write(&self.paths.history, hist[start..].join("\n"));
+    }
+
+    // tab completion
+    fn complete(&mut self) {
+        let (start, word) = self.le.word_before_cursor();
+        if word.is_empty() {
+            return;
+        }
+        let first_word = self.le.text.split_whitespace().next().map(|s| s.to_string());
+        let is_first = start == self.le.text.chars().take_while(|c| c.is_whitespace()).count();
+        let mut cands: Vec<String> = Vec::new();
+        if is_first {
+            for c in help::COMMANDS {
+                if c.name.starts_with(&word.to_ascii_uppercase()) {
+                    cands.push(c.name.to_string());
+                }
+            }
+            for g in self.imm.global_names() {
+                if g.starts_with(&word) {
+                    cands.push(g);
+                }
+            }
+        }
+        let is_file_cmd = matches!(
+            first_word.as_deref().map(|s| s.to_ascii_uppercase()).as_deref(),
+            Some("RUN" | "EDIT" | "TYPE" | "COPY" | "REN" | "DEL" | "CD" | "DIR" | "EXPORT")
+        );
+        if !is_first && is_file_cmd {
+            let (dir, base) = match word.rfind('/') {
+                Some(i) => (vfs::join(&self.cwd, &word[..i]), word[i + 1..].to_string()),
+                None => (self.cwd.clone(), word.clone()),
+            };
+            if let Ok(entries) = self.disk.list(&dir) {
+                for e in entries {
+                    if e.name.to_lowercase().starts_with(&base.to_lowercase()) {
+                        let prefix = match word.rfind('/') {
+                            Some(i) => &word[..=i],
+                            None => "",
+                        };
+                        let name = if e.is_dir { format!("{prefix}{}/", e.name) } else { format!("{prefix}{}", vfs::strip_lua_ext(&e.name)) };
+                        cands.push(name);
+                    }
+                }
+            }
+        }
+        cands.sort();
+        cands.dedup();
+        match cands.len() {
+            0 => {}
+            1 => {
+                let mut c = cands.remove(0);
+                if !c.ends_with('/') && is_first {
+                    c.push(' ');
+                }
+                self.le.replace_word(start, &c);
+            }
+            _ => {
+                // Complete the common prefix and list candidates.
+                let common = common_prefix(&cands);
+                if common.chars().count() > word.chars().count() {
+                    self.le.replace_word(start, &common);
+                } else {
+                    let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
+                    let cols = self.grid.cols();
+                    self.grid.newline();
+                    for line in help::columns(&refs, cols) {
+                        self.print(&line);
+                    }
+                }
+            }
         }
     }
 
@@ -233,12 +320,11 @@ impl Console {
             ShellCmd::Unknown(s) => self.print_error(&format!("Unknown command: {s}")),
             ShellCmd::Cls => self.cls(),
             ShellCmd::Echo(s) => self.print(s.as_deref().unwrap_or("")),
-            ShellCmd::Help => {
-                self.print("Available commands:");
-                self.print("CLS - Clear the screen");
-                self.print("ECHO [message] - Print message to the screen");
-                self.print("HELP - Show this help text");
-                self.print("EXIT - Exit Argon");
+            ShellCmd::Help(topic) => {
+                let cols = self.grid.cols();
+                for l in help::help_lines(topic.as_deref(), &self.api, cols) {
+                    self.print(&l);
+                }
             }
             ShellCmd::Exit => self.quit = true,
 
@@ -599,6 +685,20 @@ fn copy_dir_host(from: &std::path::Path, to: &std::path::Path) -> std::io::Resul
         }
     }
     Ok(())
+}
+
+fn common_prefix(items: &[String]) -> String {
+    let Some(first) = items.first() else { return String::new() };
+    let mut prefix: Vec<char> = first.chars().collect();
+    for it in &items[1..] {
+        let chars: Vec<char> = it.chars().collect();
+        let mut n = 0;
+        while n < prefix.len() && n < chars.len() && prefix[n].eq_ignore_ascii_case(&chars[n]) {
+            n += 1;
+        }
+        prefix.truncate(n);
+    }
+    prefix.into_iter().collect()
 }
 
 #[cfg(test)]
