@@ -143,7 +143,7 @@ impl ProgramHandle {
             let dt = fixed_dt.unwrap_or_else(|| now.duration_since(self.last_ack).as_secs_f64().min(0.25));
             self.last_ack = now;
             self.frame_no += 1;
-            let _ = self.acks.send(FrameAck { input, dt: dt.min(0.25), frame: self.frame_no });
+            let _ = self.acks.send(FrameAck { input, dt, frame: self.frame_no });
         }
     }
 

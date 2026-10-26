@@ -15,7 +15,8 @@ pub static COMMANDS: &[CommandDoc] = &[
 
     CommandDoc { name: "HELP", usage: "HELP [topic]", doc: "Help on a command, a function or a category (e.g. HELP draw)." },
     CommandDoc { name: "THEME", usage: "THEME [name]", doc: "Change colors: grid, amber, phosphor, blue, lcd." },
-    CommandDoc { name: "FILTER", usage: "FILTER [name]", doc: "Display effect: none, glow, scanlines, neon, crt." },
+    CommandDoc { name: "FILTER", usage: "FILTER [name]", doc: "Display effect: none, glow, glass, scanlines, neon, crt." },
+    CommandDoc { name: "FONT", usage: "FONT [name]", doc: "Console font: tech (Share Tech Mono), proggy (ProggyClean), pixel (Unscii)." },
     CommandDoc { name: "VER", usage: "VER", doc: "Show the Argon version." },
     CommandDoc { name: "EXIT", usage: "EXIT", doc: "Quit Argon." },
 

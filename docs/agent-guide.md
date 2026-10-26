@@ -17,7 +17,9 @@ Lua (Luau) file and nothing else unless asked. Follow these rules exactly.
 - Pixels persist between frames. Call `cls()` at the start of each frame for
   animation, or never call it for a drawing that accumulates.
 - Start graphical programs with `alt_screen()` so the user's shell screen is
-  restored when the program ends.
+  restored when the program ends. You may follow it with
+  `set_resolution("retro")` (320x240, faster for per-pixel work) or another
+  preset; `screen_size()` then returns the new size.
 - Esc always stops the program; you do not need to handle it. Call `exit()` to
   end early.
 - Colors are numbers from `rgb(r, g, b)` (0-255) or `hsv(h, s, v)` (h in

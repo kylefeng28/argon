@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub struct Config {
     pub theme: String,
-    /// Display filter: none, glow, scanlines, neon, crt.
+    /// Display filter: none, glow, glass, scanlines, neon, crt.
     pub filter: String,
+    /// Console font: tech (Share Tech Mono), proggy (ProggyClean), pixel (Unscii).
+    pub font: String,
     /// Window scale factor at startup (integer multiple of the virtual
     /// resolution); 0 = fit screen.
     pub window_scale: u32,
@@ -26,6 +28,7 @@ impl Default for Config {
         Config {
             theme: "amber".to_string(),
             filter: "neon".to_string(),
+            font: "tech".to_string(),
             window_scale: 0,
             fullscreen: false,
             disk: None,

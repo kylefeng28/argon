@@ -4,3 +4,5 @@
 *.png
 !assets/**/*.png
 !disk/**/*.png
+
+assets/fonts/*.ttf

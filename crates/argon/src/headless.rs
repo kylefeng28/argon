@@ -4,7 +4,7 @@
 
 use crate::script::{self, Step};
 use crate::HeadlessArgs;
-use argon_gfx::{DisplayFilter, Gpu, Renderer};
+use argon_gfx::{DisplayFilter, FontMode, Gpu, Renderer};
 use argon_shell::Console;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -49,6 +49,8 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
             renderer.reset_program_state();
             console.program_started = false;
         }
+        renderer.set_display_scale(args.scale.max(1));
+        renderer.set_font_mode(FontMode::parse(&console.config.font).unwrap_or_default());
         renderer.clear_color = out.clear_color;
         renderer.filter = DisplayFilter::parse(console.filter_name()).unwrap_or_default();
         renderer.render(&out.cmds, Some(&out.grid), out.cursor_on);

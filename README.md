@@ -28,12 +28,14 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   render-to-texture, blend modes, clip, camera, 8x16 text layer, integer-scaled
   presentation with display filters (glow (bloom halo), scanlines, vignette),
   and a headless mode for CI.
-- Appearance can be customized using `THEME` and `FILTER`.
+- Appearance
   - Themes:
     - 4 retro themes: amber/phosphor/blue/lcd
     - `grid` theme inspired by Tron: Legacy electric cyan on near-black blue with orange accents, plus a neon glow filter.
   - `FILTER` presets: none/glow/scanlines/neon/crt
-- 17 demo programs in `DEMOS/`, including matrix rain, the Tetris theme as a chiptune, and a software-rendered 3D cube.
+  - Filters: The `neon` display filter gives bright strokes a white-hot core, a colored halo and a glass-like specular rim, the light ribbon look; `glow`, `glass`, `scanlines` and `crt` are also available (`FILTER`).
+  - Font: Text is Share Tech Mono rasterized at the window's scale (so it stays sharp), with ProggyClean and the Unscii bitmap font as alternatives (`FONT`).
+- 21 demo programs in `DEMOS/`: light cycles, a progressive Mandelbrot and an animated Julia set, a tactical HUD, matrix rain, the Tetris theme as a chiptune, a software-rendered 3D cube, and more.
 
 Not yet: palette mode, user shaders (Tier 2), gamepads, mouse events,
 `.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
@@ -91,7 +93,7 @@ crates/argon-lua    Luau sandbox, API bindings + docs table, program thread
 crates/argon-shell  console state machine, shell, editor, menus
 crates/argon        binary: winit app, headless runner, CLI
 disk/DEMOS          demo programs embedded in the binary
-assets/fonts        Unscii-16 (public domain)
+assets/fonts        Share Tech Mono (OFL), ProggyClean (MIT), Unscii-16 (public domain)
 ```
 
 License: MIT OR Apache-2.0.

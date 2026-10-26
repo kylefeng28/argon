@@ -1,7 +1,7 @@
-use crate::atlas::Atlas;
+use crate::atlas::{Atlas, FontMode, Fonts};
 use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
 use argon_core::raster::{self, Span};
-use argon_core::{Color, Font, TextGrid, CELL_H, CELL_W};
+use argon_core::{Color, TextGrid, CELL_H, CELL_W};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -123,21 +123,24 @@ impl DisplayFilter {
     pub const NONE: DisplayFilter = DisplayFilter(0);
     pub const GLOW: DisplayFilter = DisplayFilter(1);
     pub const SCANLINES: DisplayFilter = DisplayFilter(2);
-    pub const CRT: DisplayFilter = DisplayFilter(7);
-    pub const NEON: DisplayFilter = DisplayFilter(5);
+    pub const GLASS: DisplayFilter = DisplayFilter(8);
+    /// glow + glass + vignette: the light-ribbon look.
+    pub const NEON: DisplayFilter = DisplayFilter(1 | 4 | 8);
+    pub const CRT: DisplayFilter = DisplayFilter(1 | 2 | 4);
 
     pub fn parse(name: &str) -> Option<DisplayFilter> {
         match name.to_ascii_lowercase().as_str() {
             "none" | "off" => Some(Self::NONE),
             "glow" | "bloom" => Some(Self::GLOW),
             "scanlines" => Some(Self::SCANLINES),
-            "crt" => Some(Self::CRT),
+            "glass" | "water" => Some(Self::GLASS),
             "neon" => Some(Self::NEON),
+            "crt" => Some(Self::CRT),
             _ => None,
         }
     }
 
-    pub const NAMES: &'static [&'static str] = &["none", "glow", "scanlines", "neon", "crt"];
+    pub const NAMES: &'static [&'static str] = &["none", "glow", "glass", "scanlines", "neon", "crt"];
 }
 
 #[repr(C)]
@@ -145,7 +148,7 @@ impl DisplayFilter {
 struct PresentParams {
     texel: [f32; 2],
     mode: u32,
-    scale: f32,
+    rows: f32,
     rect: [f32; 4],
 }
 
@@ -171,8 +174,16 @@ pub struct Renderer {
     present_bind_group: Option<wgpu::BindGroup>,
     pub filter: DisplayFilter,
     sampler: wgpu::Sampler,
+    fonts: Arc<Fonts>,
+    font_mode: FontMode,
+    /// Glyphs at framebuffer scale (for `draw_text`).
     atlas: Atlas,
     atlas_tex: TexBundle,
+    /// Glyphs at display scale (for the text layer).
+    ui_atlas: Atlas,
+    ui_atlas_tex: TexBundle,
+    /// Integer factor between the framebuffer and the composite/window.
+    display_scale: u32,
     framebuffer: TexBundle,
     composite: TexBundle,
     /// Copy of the framebuffer taken by `SaveScreen`.
@@ -277,15 +288,12 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let font = Font::builtin();
-        let atlas = Atlas::build(&font);
+        let fonts = Fonts::load();
+        let font_mode = FontMode::default();
+        let atlas = Atlas::new(fonts.clone(), font_mode, 1);
         let atlas_tex = create_texture(device, &bgl, &sampler, atlas.width, atlas.height, Some("atlas"));
-        gpu.queue.write_texture(
-            atlas_tex.texture.as_image_copy(),
-            &atlas.pixels,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(atlas.width * 4), rows_per_image: None },
-            wgpu::Extent3d { width: atlas.width, height: atlas.height, depth_or_array_layers: 1 },
-        );
+        let ui_atlas = Atlas::new(fonts.clone(), font_mode, 1);
+        let ui_atlas_tex = create_texture(device, &bgl, &sampler, ui_atlas.width, ui_atlas.height, Some("ui-atlas"));
 
         let framebuffer = create_texture(device, &bgl, &sampler, width, height, Some("framebuffer"));
         let composite = create_texture(device, &bgl, &sampler, width, height, Some("composite"));
@@ -310,8 +318,13 @@ impl Renderer {
             present_bind_group: None,
             filter: DisplayFilter::NONE,
             sampler,
+            fonts,
+            font_mode,
             atlas,
             atlas_tex,
+            ui_atlas,
+            ui_atlas_tex,
+            display_scale: 1,
             framebuffer,
             composite,
             saved_screen: None,
@@ -333,6 +346,48 @@ impl Renderer {
         (self.width, self.height)
     }
 
+    pub fn display_scale(&self) -> u32 {
+        self.display_scale
+    }
+
+    /// Set the integer factor between the framebuffer and the window. The
+    /// text layer is rasterized at this scale so glyphs stay sharp.
+    pub fn set_display_scale(&mut self, scale: u32) {
+        let scale = scale.clamp(1, 8);
+        if scale == self.display_scale {
+            return;
+        }
+        self.display_scale = scale;
+        self.rebuild_ui_atlas();
+        self.rebuild_composite();
+    }
+
+    pub fn font_mode(&self) -> FontMode {
+        self.font_mode
+    }
+
+    pub fn set_font_mode(&mut self, mode: FontMode) {
+        if mode == self.font_mode {
+            return;
+        }
+        self.font_mode = mode;
+        self.atlas = Atlas::new(self.fonts.clone(), mode, 1);
+        self.atlas_tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, self.atlas.width, self.atlas.height, Some("atlas"));
+        self.rebuild_ui_atlas();
+    }
+
+    fn rebuild_ui_atlas(&mut self) {
+        self.ui_atlas = Atlas::new(self.fonts.clone(), self.font_mode, self.display_scale);
+        self.ui_atlas_tex =
+            create_texture(&self.gpu.device, &self.bgl, &self.sampler, self.ui_atlas.width, self.ui_atlas.height, Some("ui-atlas"));
+    }
+
+    fn rebuild_composite(&mut self) {
+        let (cw, ch) = (self.width * self.display_scale, self.height * self.display_scale);
+        self.composite = create_texture(&self.gpu.device, &self.bgl, &self.sampler, cw, ch, Some("composite"));
+        self.present_bind_group = None;
+    }
+
     /// Change the virtual resolution. Clears the framebuffer.
     pub fn resize(&mut self, width: u32, height: u32) {
         if (width, height) == (self.width, self.height) {
@@ -341,8 +396,7 @@ impl Renderer {
         self.width = width;
         self.height = height;
         self.framebuffer = create_texture(&self.gpu.device, &self.bgl, &self.sampler, width, height, Some("framebuffer"));
-        self.composite = create_texture(&self.gpu.device, &self.bgl, &self.sampler, width, height, Some("composite"));
-        self.present_bind_group = None;
+        self.rebuild_composite();
         self.state = DrawState::default();
         self.clear_framebuffer(Color::BLACK);
     }
@@ -679,9 +733,9 @@ impl Renderer {
         let program_vert_end = self.verts.len() as u32;
         let program_batches = std::mem::take(&mut self.batches);
 
-        // Composite geometry: framebuffer quad then text cells, in window
-        // (= composite) pixel space.
-        let (tw, th) = (self.width, self.height);
+        // Composite geometry: framebuffer quad then text cells, in composite
+        // pixel space (framebuffer size times the display scale).
+        let (tw, th) = (self.width * self.display_scale, self.height * self.display_scale);
         let fb_start = self.verts.len() as u32;
         self.quad_px(
             [[0.0, 0.0], [tw as f32, 0.0], [tw as f32, th as f32], [0.0, th as f32]],
@@ -698,6 +752,8 @@ impl Renderer {
         let text_end = self.verts.len() as u32;
 
         self.upload_verts();
+        self.atlas.flush(&self.gpu.queue, &self.atlas_tex.texture);
+        self.ui_atlas.flush(&self.gpu.queue, &self.ui_atlas_tex.texture);
 
         let mut enc = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 
@@ -780,7 +836,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.framebuffer.bind_group, &[]);
             pass.draw(fb_start..fb_end, 0..1);
             if text_end > text_start {
-                pass.set_bind_group(0, &self.atlas_tex.bind_group, &[]);
+                pass.set_bind_group(0, &self.ui_atlas_tex.bind_group, &[]);
                 pass.draw(text_start..text_end, 0..1);
             }
         }
@@ -807,11 +863,13 @@ impl Renderer {
 
     fn text_layer_verts(&mut self, grid: &TextGrid, cursor_on: bool, tw: u32, th: u32) {
         let cols = grid.cols();
+        let s = self.display_scale;
+        let (cw, chh) = ((CELL_W * s) as f32, (CELL_H * s) as f32);
         for (i, cell) in grid.cells().iter().enumerate() {
             let col = i % cols;
             let row = i / cols;
-            let x = (col as u32 * CELL_W) as f32;
-            let y = (row as u32 * CELL_H) as f32;
+            let x = (col as u32 * CELL_W * s) as f32;
+            let y = (row as u32 * CELL_H * s) as f32;
             let is_cursor = cursor_on && grid.cursor_visible && col == grid.cursor_col && row == grid.cursor_row;
             let (fg, bg) = if is_cursor {
                 (cell.bg.unwrap_or(self.clear_color), Some(cell.fg))
@@ -819,10 +877,17 @@ impl Renderer {
                 (cell.fg, cell.bg)
             };
             if let Some(bg) = bg {
-                self.solid_rect_px(x, y, x + CELL_W as f32, y + CELL_H as f32, bg, tw, th);
+                self.solid_rect_px(x, y, x + cw, y + chh, bg, tw, th);
             }
             if cell.ch != ' ' {
-                self.glyph_quad(cell.ch, x, y, 1.0, fg, tw, th);
+                let [u0, v0, u1, v1] = self.ui_atlas.glyph_uv(cell.ch);
+                self.quad_px(
+                    [[x, y], [x + cw, y], [x + cw, y + chh], [x, y + chh]],
+                    [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+                    fg,
+                    tw,
+                    th,
+                );
             }
         }
     }
@@ -911,9 +976,10 @@ impl Renderer {
         );
         self.upload_verts();
         let params = PresentParams {
+            // Filter radii are in framebuffer pixels regardless of scale.
             texel: [1.0 / self.width as f32, 1.0 / self.height as f32],
             mode: self.filter.0,
-            scale: scale as f32,
+            rows: self.height as f32,
             rect: [ox, oy, dw as f32, dh as f32],
         };
         self.gpu.queue.write_buffer(&self.present_params, 0, bytemuck::bytes_of(&params));
@@ -942,6 +1008,7 @@ impl Renderer {
     /// read it back (what the user would see, filter included).
     pub fn read_display(&mut self, scale: u32) -> (u32, u32, Vec<u8>) {
         let scale = scale.max(1);
+        debug_assert_eq!(scale, self.display_scale, "set_display_scale before rendering");
         let (w, h) = (self.width * scale, self.height * scale);
         let tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, w, h, Some("display"));
         self.present(PresentTarget { view: &tex.view, width: w, height: h, format: FB_FORMAT });

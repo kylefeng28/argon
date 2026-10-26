@@ -396,6 +396,7 @@ impl Console {
 
             ShellCmd::Theme(name) => self.cmd_theme(name),
             ShellCmd::Filter(name) => self.cmd_filter(name),
+            ShellCmd::Font(name) => self.cmd_font(name),
 
             ShellCmd::Cd(dir) => self.cmd_cd(dir),
             ShellCmd::Dir(pat) => self.cmd_dir(pat.as_deref()),
@@ -815,7 +816,7 @@ impl Console {
     }
 
     fn cmd_filter(&mut self, name: Option<String>) {
-        const NAMES: &[&str] = &["none", "glow", "scanlines", "neon", "crt"];
+        const NAMES: &[&str] = &["none", "glow", "glass", "scanlines", "neon", "crt"];
         match name {
             None => {
                 let list: Vec<String> = NAMES.iter().map(|n| if *n == self.config.filter { format!("{n} (current)") } else { n.to_string() }).collect();
@@ -843,6 +844,26 @@ impl Console {
             }
         }
         &self.config.filter
+    }
+
+    fn cmd_font(&mut self, name: Option<String>) {
+        const NAMES: &[&str] = &["tech", "proggy", "pixel"];
+        match name {
+            None => {
+                let list: Vec<String> = NAMES.iter().map(|n| if *n == self.config.font { format!("{n} (current)") } else { n.to_string() }).collect();
+                self.print(&format!("Fonts: {}", list.join(", ")));
+            }
+            Some(n) => {
+                let n = n.to_ascii_lowercase();
+                if NAMES.contains(&n.as_str()) {
+                    self.config.font = n.clone();
+                    let _ = self.config.save(&self.paths.config);
+                    self.print(&format!("Font: {n}"));
+                } else {
+                    self.print_error(&format!("Unknown font '{n}'. Try: {}", NAMES.join(", ")));
+                }
+            }
+        }
     }
 
     fn cmd_export(&mut self, name: Option<String>) {
@@ -1053,15 +1074,18 @@ impl Console {
         }
 
         self.mode = Mode::Shell;
-        if r.resolution_changed || self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+        if r.alt_screen {
+            // The program drew on the alternate screen: bring the shell back
+            // (the host resizes before running these commands, so the saved
+            // 640x400 screen copies back cleanly even after set_resolution).
             self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
-            self.grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
-            cmds.push(DrawCmd::Clear(self.theme.bg));
-        } else if r.alt_screen {
-            // The program drew on the alternate screen: bring the shell back.
             cmds.push(DrawCmd::RestoreScreen);
             self.grid = r.shell_grid;
             self.grid.locate(0, self.prompt_row);
+        } else if r.resolution_changed || self.resolution != (DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+            self.resolution = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            self.grid = TextGrid::for_pixels(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            cmds.push(DrawCmd::Clear(self.theme.bg));
         } else {
             // Keep the program's screen; continue below its text cursor.
             self.grid = r.grid;

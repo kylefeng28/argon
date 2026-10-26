@@ -5,6 +5,6 @@
 mod atlas;
 mod renderer;
 
-pub use atlas::Atlas;
+pub use atlas::{Atlas, FontMode, Fonts};
 pub use renderer::{DisplayFilter, Gpu, PresentTarget, Renderer};
 pub use wgpu;

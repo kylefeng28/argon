@@ -50,8 +50,11 @@ THE SHELL
     HELP [topic]       Help on a command, a function (HELP fill_rect), or a
                        category (HELP draw, HELP sound, ...).
     THEME [name]       Colors: grid (default), phosphor, amber, blue, lcd.
-    FILTER [name]      Display effect: none, glow, scanlines, neon (default),
-                       crt. Both are saved in config.toml.
+    FILTER [name]      Display effect: none, glow, glass, scanlines,
+                       neon (default: glow + glass + vignette), crt.
+    FONT [name]        Console font: tech (Share Tech Mono, default), proggy
+                       (ProggyClean), pixel (Unscii bitmap). All three
+                       settings are saved in config.toml.
     VER                Show the version.
     EXPORT name        Copy a program to ~/.argon/export/ for sharing.
     IMPORT path        Copy a .lua file or program folder from the host disk
@@ -110,6 +113,10 @@ PROGRAMS
           if button("a") then beep(880, 0.05) end
           flip()
         end
+
+    A program may switch resolution at any time: set_resolution("retro")
+    (320x240), "tiny", "classic", "hd" or "WxH". Combined with alt_screen()
+    the shell comes back untouched at 640x400 when the program ends.
 
     Settings can be given in a comment header of a single file:
 
@@ -171,7 +178,8 @@ FILES
     ~/.argon/disk/DEMOS/      Demo programs, read-only, reinstalled at start
     ~/.argon/disk/SAVE/       save()/load() data, one JSON file per program
     ~/.argon/export/          EXPORT output
-    ~/.argon/config.toml      theme, filter, window_scale, fullscreen, keymap, editor
+    ~/.argon/config.toml      theme, filter, font, window_scale, fullscreen,
+                              keymap, editor
     ~/.argon/history.txt      shell history
 
 HEADLESS

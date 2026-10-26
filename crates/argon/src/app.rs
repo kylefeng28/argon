@@ -2,7 +2,7 @@
 
 use crate::keymap;
 use argon_core::input::KeyCode;
-use argon_gfx::{wgpu, DisplayFilter, Gpu, PresentTarget, Renderer};
+use argon_gfx::{wgpu, DisplayFilter, FontMode, Gpu, PresentTarget, Renderer};
 use argon_shell::Console;
 use std::sync::Arc;
 use std::time::Instant;
@@ -116,6 +116,10 @@ impl App {
         if out.resolution != g.renderer.size() {
             g.renderer.resize(out.resolution.0, out.resolution.1);
         }
+        let (vw, vh) = g.renderer.size();
+        let scale = (g.config.width / vw).min(g.config.height / vh).max(1);
+        g.renderer.set_display_scale(scale);
+        g.renderer.set_font_mode(FontMode::parse(&self.console.config.font).unwrap_or_default());
         if self.console.program_started {
             g.renderer.reset_program_state();
             self.console.program_started = false;
