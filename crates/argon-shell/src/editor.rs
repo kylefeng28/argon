@@ -845,7 +845,7 @@ impl Editor {
 
     fn gutter_width(&self) -> usize {
         let digits = format!("{}", self.lines.len()).len().max(3);
-        digits + 2
+        digits + 3
     }
 
     fn ensure_visible(&mut self, text_rows: usize, text_cols: usize) {
@@ -885,14 +885,17 @@ impl Editor {
         for row in 0..text_rows {
             let li = self.scroll_row + row;
             if li >= self.lines.len() {
-                break;
+                grid.put_char_colored(gutter - 2, row, '\u{2502}', theme.dim, Some(theme.bg));
+                continue;
             }
             let line = &self.lines[li];
             let (toks, next) = highlight_line(line, state, &is_builtin);
             state = next;
-            let num = format!("{:>w$} ", li + 1, w = gutter - 2);
+            let num = format!("{:>w$} \u{2502} ", li + 1, w = gutter - 4);
             let num_fg = if li == self.cur.line { theme.accent } else { theme.dim };
             grid.put_str_colored(0, row, &num, num_fg, Some(theme.bg));
+            // Keep the separator dim even on the current line.
+            grid.put_char_colored(gutter - 2, row, '\u{2502}', theme.dim, Some(theme.bg));
             for (ci, ch) in line.chars().enumerate().skip(self.scroll_col).take(text_cols) {
                 let fg = match toks[ci] {
                     Tok::Plain => theme.fg,
@@ -928,10 +931,11 @@ impl Editor {
             grid.cursor_row = status_row;
             grid.cursor_visible = true;
         } else {
-            let left = format!(" {}{}  Ln {}, Col {}", self.name, if self.modified { "*" } else { "" }, self.cur.line + 1, self.cur.col + 1);
+            let left = format!(" {}{} \u{2502} Ln {} Col {} \u{2502}", self.name, if self.modified { " \u{25CF}" } else { "" }, self.cur.line + 1, self.cur.col + 1);
             grid.put_str_colored(0, status_row, &left, theme.status_fg, Some(theme.status_bg));
+            grid.put_str_colored(1, status_row, &self.name, theme.accent, Some(theme.status_bg));
             let right = if self.status.is_empty() {
-                "F1 Catalog  F2 Control  F4 Draw  F5 Run  F10 Save+Exit".to_string()
+                "F1 CATALOG  F2 CONTROL  F4 DRAW  F5 RUN  F10 EXIT".to_string()
             } else {
                 self.status.clone()
             };

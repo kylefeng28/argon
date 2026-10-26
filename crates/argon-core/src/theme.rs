@@ -39,7 +39,29 @@ impl Theme {
     }
 }
 
-pub static THEMES: [Theme; 4] = [
+pub static THEMES: [Theme; 5] = [
+    // The Grid: Tron: Legacy electric cyan on near-black blue, orange for
+    // warnings and strings (the "Clu" colors).
+    Theme {
+        name: "grid",
+        bg: Color::rgb(3, 9, 18),
+        fg: Color::rgb(0, 212, 236),
+        dim: Color::rgb(0, 96, 118),
+        accent: Color::rgb(214, 255, 255),
+        error: Color::rgb(255, 122, 24),
+        status_bg: Color::rgb(0, 40, 56),
+        status_fg: Color::rgb(140, 240, 255),
+        selection_bg: Color::rgb(0, 70, 92),
+        menu_bg: Color::rgb(2, 20, 34),
+        menu_fg: Color::rgb(0, 212, 236),
+        menu_hl_bg: Color::rgb(0, 212, 236),
+        menu_hl_fg: Color::rgb(3, 9, 18),
+        syn_keyword: Color::rgb(214, 255, 255),
+        syn_string: Color::rgb(255, 160, 64),
+        syn_number: Color::rgb(255, 214, 120),
+        syn_comment: Color::rgb(0, 110, 134),
+        syn_builtin: Color::rgb(120, 236, 255),
+    },
     Theme {
         name: "amber",
         bg: Color::rgb(16, 10, 2),

@@ -49,7 +49,9 @@ THE SHELL
     VARCLEAR           Forget all variables and functions defined at the prompt.
     HELP [topic]       Help on a command, a function (HELP fill_rect), or a
                        category (HELP draw, HELP sound, ...).
-    THEME [name]       Colors: phosphor, amber, blue, lcd. Saved in config.
+    THEME [name]       Colors: grid (default), phosphor, amber, blue, lcd.
+    FILTER [name]      Display effect: none, glow, scanlines, neon (default),
+                       crt. Both are saved in config.toml.
     VER                Show the version.
     EXPORT name        Copy a program to ~/.argon/export/ for sharing.
     IMPORT path        Copy a .lua file or program folder from the host disk
@@ -120,6 +122,7 @@ PROGRAMS
         author = "you"
         resolution = "classic"
         fps = 60
+        filter = "crt"          # optional display effect while running
 
     Pad buttons (button("a") etc.) map to the keyboard: arrows, Z=a, X=b,
     A=x, S=y, Q=l, W=r, Enter=start, Shift=select. Change them under
@@ -168,7 +171,7 @@ FILES
     ~/.argon/disk/DEMOS/      Demo programs, read-only, reinstalled at start
     ~/.argon/disk/SAVE/       save()/load() data, one JSON file per program
     ~/.argon/export/          EXPORT output
-    ~/.argon/config.toml      theme, window_scale, fullscreen, keymap, editor
+    ~/.argon/config.toml      theme, filter, window_scale, fullscreen, keymap, editor
     ~/.argon/history.txt      shell history
 
 HEADLESS

@@ -46,6 +46,8 @@ struct Running {
     /// `alt_screen()`.
     shell_grid: TextGrid,
     alt_screen: bool,
+    /// Cart manifest filter override.
+    filter: String,
 }
 
 /// What the renderer needs this frame.
@@ -183,18 +185,27 @@ impl Console {
 
     fn banner(&mut self) {
         let accent = self.theme.accent;
+        let fg = self.theme.fg;
         let dim = self.theme.dim;
 
-        self.print_colored(&format!("ARGON {}  -  a fantasy console", argon_core::VERSION), accent);
-
+        let cols = self.grid.cols();
         let used = dir_size(&self.paths.disk);
-        self.print_colored(
-            &format!("{}x{} text, {}x{} pixels, Luau.  Disk: {} used.",
-                self.grid.cols(), self.grid.rows(), DEFAULT_WIDTH, DEFAULT_HEIGHT, shell::human_size(used)),
-            dim,
-        );
 
-        self.print_colored("Type HELP and press enter for information", dim);
+        let rule: String = "\u{2500}".repeat(cols.saturating_sub(1));
+
+        // A framed header line in the style of a system readout.
+        self.print_colored(&rule, dim);
+        let left = format!("  ARGON {}", argon_core::VERSION);
+        let right = format!("{}x{}  {}x{}  LUAU  DISK {}  ",
+            self.grid.cols(), self.grid.rows(), DEFAULT_WIDTH, DEFAULT_HEIGHT, shell::human_size(used).to_ascii_uppercase());
+        let pad = cols.saturating_sub(left.chars().count() + right.chars().count());
+        let row = self.grid.cursor_row;
+        self.grid.put_str_colored(0, row, &left, accent, None);
+        self.grid.put_str_colored(left.chars().count() + pad, row, &right, fg, None);
+        self.grid.newline();
+        self.print_colored(&rule, dim);
+        self.print_colored("  A fantasy console.", fg);
+        self.print_colored("  HELP for commands.  Run Lua using EVAL or LUA: LUA print(2^10)", dim);
         self.grid.newline();
     }
 
@@ -218,8 +229,8 @@ impl Console {
 
     fn prompt_text(&self) -> String {
         match self.cwd.is_empty() {
-            true => "ARGON> ".to_string(),
-            false => format!("ARGON:{}> ", self.cwd.replace('/', "\\").to_ascii_uppercase()),
+            true => "ARGON \u{25B8} ".to_string(),
+            false => format!("ARGON:{} \u{25B8} ", self.cwd.replace('/', "\\").to_ascii_uppercase())
         }
     }
 
@@ -384,6 +395,7 @@ impl Console {
             ShellCmd::Exit => self.quit = true,
 
             ShellCmd::Theme(name) => self.cmd_theme(name),
+            ShellCmd::Filter(name) => self.cmd_filter(name),
 
             ShellCmd::Cd(dir) => self.cmd_cd(dir),
             ShellCmd::Dir(pat) => self.cmd_dir(pat.as_deref()),
@@ -596,7 +608,7 @@ impl Console {
         grid.cursor_visible = false;
         self.input.clear_all();
         let shell_grid = self.grid.clone();
-        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1), shell_grid, alt_screen: false });
+        self.program = Some(Running { handle, from_editor, location: loc, grid, resolution_changed, fps: manifest.fps.max(1), shell_grid, alt_screen: false, filter: manifest.filter.to_ascii_lowercase() });
         self.mode = Mode::Running;
         self.program_started = true;
         self.cmds.push(DrawCmd::Clear(Color::BLACK));
@@ -800,6 +812,37 @@ impl Console {
         self.grid.cursor_visible = true;
         self.prompt_row = 0;
         self.cmds.push(DrawCmd::Clear(self.theme.bg));
+    }
+
+    fn cmd_filter(&mut self, name: Option<String>) {
+        const NAMES: &[&str] = &["none", "glow", "scanlines", "neon", "crt"];
+        match name {
+            None => {
+                let list: Vec<String> = NAMES.iter().map(|n| if *n == self.config.filter { format!("{n} (current)") } else { n.to_string() }).collect();
+                self.print(&format!("Filters: {}", list.join(", ")));
+            }
+            Some(n) => {
+                let n = n.to_ascii_lowercase();
+                if NAMES.contains(&n.as_str()) {
+                    self.config.filter = n.clone();
+                    let _ = self.config.save(&self.paths.config);
+                    self.print(&format!("Filter: {n}"));
+                } else {
+                    self.print_error(&format!("Unknown filter '{n}'. Try: {}", NAMES.join(", ")));
+                }
+            }
+        }
+    }
+
+    /// Display filter to apply right now: the running cart's override, or
+    /// the user's setting.
+    pub fn filter_name(&self) -> &str {
+        if let Some(r) = &self.program {
+            if !r.filter.is_empty() {
+                return &r.filter;
+            }
+        }
+        &self.config.filter
     }
 
     fn cmd_export(&mut self, name: Option<String>) {
@@ -1173,7 +1216,7 @@ mod tests {
         type_line(&mut c, "cd demos");
         type_line(&mut c, "type hello");
         assert!(c.screen_text().contains("print('hi')"));
-        assert!(c.screen_text().contains("ARGON:DEMOS>") || c.prompt_text().contains("DEMOS"));
+        assert!(c.prompt_text().contains("DEMOS"));
     }
 
     #[test]

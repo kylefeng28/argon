@@ -26,11 +26,17 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
 - wgpu renderer: persistent 640x400 framebuffer (per-cart resolution),
   pixel-exact CPU-rasterized primitives, sprites with rotation/scale/flip,
   render-to-texture, blend modes, clip, camera, 8x16 text layer, integer-scaled
-  presentation, and a headless mode for CI.
-- 16 demo programs in `DEMOS/`, including matrix rain and a chiptune.
+  presentation with display filters (glow (bloom halo), scanlines, vignette),
+  and a headless mode for CI.
+- Appearance can be customized using `THEME` and `FILTER`.
+  - Themes:
+    - 4 retro themes: amber/phosphor/blue/lcd
+    - `grid` theme inspired by Tron: Legacy electric cyan on near-black blue with orange accents, plus a neon glow filter.
+  - `FILTER` presets: none/glow/scanlines/neon/crt
+- 17 demo programs in `DEMOS/`, including matrix rain, the Tetris theme as a chiptune, and a software-rendered 3D cube.
 
-Not yet: palette mode, shaders (Tier 2), gamepads, mouse events, `.argon`
-zip export, browser build. See `docs/api-sketch.md` for the API.
+Not yet: palette mode, user shaders (Tier 2), gamepads, mouse events,
+`.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
 
 ## Build and run
 

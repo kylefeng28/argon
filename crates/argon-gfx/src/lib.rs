@@ -6,5 +6,5 @@ mod atlas;
 mod renderer;
 
 pub use atlas::Atlas;
-pub use renderer::{Gpu, PresentTarget, Renderer};
+pub use renderer::{DisplayFilter, Gpu, PresentTarget, Renderer};
 pub use wgpu;

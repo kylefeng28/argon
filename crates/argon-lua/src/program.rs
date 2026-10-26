@@ -234,7 +234,7 @@ mod tests {
         loop {
             if h.poll_frame().is_some() {
                 frames += 1;
-                h.ack(InputSnapshot::default());
+                h.ack(InputSnapshot::default(), None);
             }
             if let Some(e) = h.poll_exit() {
                 assert_eq!(*e, ProgramExit::Finished);

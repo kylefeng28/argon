@@ -2,7 +2,7 @@
 
 use crate::keymap;
 use argon_core::input::KeyCode;
-use argon_gfx::{wgpu, Gpu, PresentTarget, Renderer};
+use argon_gfx::{wgpu, DisplayFilter, Gpu, PresentTarget, Renderer};
 use argon_shell::Console;
 use std::sync::Arc;
 use std::time::Instant;
@@ -121,6 +121,7 @@ impl App {
             self.console.program_started = false;
         }
         g.renderer.clear_color = out.clear_color;
+        g.renderer.filter = DisplayFilter::parse(self.console.filter_name()).unwrap_or_default();
         g.renderer.render(&out.cmds, Some(&out.grid), out.cursor_on);
 
         let frame = match g.surface.get_current_texture() {

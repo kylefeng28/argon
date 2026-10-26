@@ -114,6 +114,41 @@ impl Default for DrawState {
     }
 }
 
+/// Display filter applied by the presenter (FR-C4). Bits: 1 glow,
+/// 2 scanlines, 4 vignette.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DisplayFilter(pub u32);
+
+impl DisplayFilter {
+    pub const NONE: DisplayFilter = DisplayFilter(0);
+    pub const GLOW: DisplayFilter = DisplayFilter(1);
+    pub const SCANLINES: DisplayFilter = DisplayFilter(2);
+    pub const CRT: DisplayFilter = DisplayFilter(7);
+    pub const NEON: DisplayFilter = DisplayFilter(5);
+
+    pub fn parse(name: &str) -> Option<DisplayFilter> {
+        match name.to_ascii_lowercase().as_str() {
+            "none" | "off" => Some(Self::NONE),
+            "glow" | "bloom" => Some(Self::GLOW),
+            "scanlines" => Some(Self::SCANLINES),
+            "crt" => Some(Self::CRT),
+            "neon" => Some(Self::NEON),
+            _ => None,
+        }
+    }
+
+    pub const NAMES: &'static [&'static str] = &["none", "glow", "scanlines", "neon", "crt"];
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PresentParams {
+    texel: [f32; 2],
+    mode: u32,
+    scale: f32,
+    rect: [f32; 4],
+}
+
 /// Where `present` draws: a surface texture view with its size and format.
 pub struct PresentTarget<'a> {
     pub view: &'a wgpu::TextureView,
@@ -128,6 +163,13 @@ pub struct Renderer {
     bgl: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     pipelines: HashMap<(BlendMode, wgpu::TextureFormat), wgpu::RenderPipeline>,
+    present_shader: wgpu::ShaderModule,
+    present_bgl: wgpu::BindGroupLayout,
+    present_layout: wgpu::PipelineLayout,
+    present_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    present_params: wgpu::Buffer,
+    present_bind_group: Option<wgpu::BindGroup>,
+    pub filter: DisplayFilter,
     sampler: wgpu::Sampler,
     atlas: Atlas,
     atlas_tex: TexBundle,
@@ -188,6 +230,53 @@ impl Renderer {
             ..Default::default()
         });
 
+        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("argon-present"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+        });
+        let present_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("argon-present"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let present_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("argon-present"),
+            bind_group_layouts: &[&present_bgl],
+            push_constant_ranges: &[],
+        });
+        let present_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present-params"),
+            size: std::mem::size_of::<PresentParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let font = Font::builtin();
         let atlas = Atlas::build(&font);
         let atlas_tex = create_texture(device, &bgl, &sampler, atlas.width, atlas.height, Some("atlas"));
@@ -213,6 +302,13 @@ impl Renderer {
             bgl,
             pipeline_layout,
             pipelines: HashMap::new(),
+            present_shader,
+            present_bgl,
+            present_layout,
+            present_pipelines: HashMap::new(),
+            present_params,
+            present_bind_group: None,
+            filter: DisplayFilter::NONE,
             sampler,
             atlas,
             atlas_tex,
@@ -246,6 +342,7 @@ impl Renderer {
         self.height = height;
         self.framebuffer = create_texture(&self.gpu.device, &self.bgl, &self.sampler, width, height, Some("framebuffer"));
         self.composite = create_texture(&self.gpu.device, &self.bgl, &self.sampler, width, height, Some("composite"));
+        self.present_bind_group = None;
         self.state = DrawState::default();
         self.clear_framebuffer(Color::BLACK);
     }
@@ -754,11 +851,53 @@ impl Renderer {
         }
     }
 
-    /// Blit the composite onto a window surface with integer scaling and
-    /// letterboxing (FR-C3).
+    fn present_pipeline(&mut self, format: wgpu::TextureFormat) {
+        if self.present_pipelines.contains_key(&format) {
+            return;
+        }
+        let p = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("argon-present"),
+            layout: Some(&self.present_layout),
+            vertex: wgpu::VertexState {
+                module: &self.present_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::LAYOUT],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.present_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.present_pipelines.insert(format, p);
+    }
+
+    fn ensure_present_bind_group(&mut self) {
+        if self.present_bind_group.is_none() {
+            self.present_bind_group = Some(self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("argon-present"),
+                layout: &self.present_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.composite.view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: self.present_params.as_entire_binding() },
+                ],
+            }));
+        }
+    }
+
+    /// Blit the composite onto a window surface with integer scaling,
+    /// letterboxing (FR-C3) and the current display filter (FR-C4).
     pub fn present(&mut self, target: PresentTarget<'_>) {
         let scale = (target.width / self.width).min(target.height / self.height).max(1);
-        let (dw, dh) = (self.width * scale, target_h_scaled(self.height, scale));
+        let (dw, dh) = (self.width * scale, self.height * scale);
         let (dw, dh) = (dw.min(target.width).max(1), dh.min(target.height).max(1));
         let ox = ((target.width as i64 - dw as i64) / 2).max(0) as f32;
         let oy = ((target.height as i64 - dh as i64) / 2).max(0) as f32;
@@ -771,7 +910,15 @@ impl Renderer {
             target.height,
         );
         self.upload_verts();
-        self.pipeline(BlendMode::Replace, target.format);
+        let params = PresentParams {
+            texel: [1.0 / self.width as f32, 1.0 / self.height as f32],
+            mode: self.filter.0,
+            scale: scale as f32,
+            rect: [ox, oy, dw as f32, dh as f32],
+        };
+        self.gpu.queue.write_buffer(&self.present_params, 0, bytemuck::bytes_of(&params));
+        self.present_pipeline(target.format);
+        self.ensure_present_bind_group();
         let mut enc = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("present") });
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -784,11 +931,21 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_vertex_buffer(0, self.vbuf.slice(..));
-            pass.set_pipeline(&self.pipelines[&(BlendMode::Replace, target.format)]);
-            pass.set_bind_group(0, &self.composite.bind_group, &[]);
+            pass.set_pipeline(&self.present_pipelines[&target.format]);
+            pass.set_bind_group(0, self.present_bind_group.as_ref().unwrap(), &[]);
             pass.draw(0..6, 0..1);
         }
         self.gpu.queue.submit([enc.finish()]);
+    }
+
+    /// Run the presenter into an offscreen texture at an integer scale and
+    /// read it back (what the user would see, filter included).
+    pub fn read_display(&mut self, scale: u32) -> (u32, u32, Vec<u8>) {
+        let scale = scale.max(1);
+        let (w, h) = (self.width * scale, self.height * scale);
+        let tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, w, h, Some("display"));
+        self.present(PresentTarget { view: &tex.view, width: w, height: h, format: FB_FORMAT });
+        (w, h, self.read_texture(&tex))
     }
 
     /// Read back the composite as tightly packed RGBA8 (for screenshots and
@@ -841,10 +998,6 @@ impl Renderer {
         buf.unmap();
         out
     }
-}
-
-fn target_h_scaled(h: u32, scale: u32) -> u32 {
-    h * scale
 }
 
 fn clip_to_scissor(clip: Option<Rect>, (tw, th): (u32, u32)) -> (u32, u32, u32, u32) {

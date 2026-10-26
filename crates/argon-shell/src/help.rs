@@ -14,6 +14,8 @@ pub static COMMANDS: &[CommandDoc] = &[
     CommandDoc { name: "VARCLEAR", usage: "VARCLEAR", doc: "Forget all variables and functions defined at the prompt." },
 
     CommandDoc { name: "HELP", usage: "HELP [topic]", doc: "Help on a command, a function or a category (e.g. HELP draw)." },
+    CommandDoc { name: "THEME", usage: "THEME [name]", doc: "Change colors: grid, amber, phosphor, blue, lcd." },
+    CommandDoc { name: "FILTER", usage: "FILTER [name]", doc: "Display effect: none, glow, scanlines, neon, crt." },
     CommandDoc { name: "VER", usage: "VER", doc: "Show the Argon version." },
     CommandDoc { name: "EXIT", usage: "EXIT", doc: "Quit Argon." },
 

@@ -4,7 +4,7 @@
 
 use crate::script::{self, Step};
 use crate::HeadlessArgs;
-use argon_gfx::{Gpu, Renderer};
+use argon_gfx::{DisplayFilter, Gpu, Renderer};
 use argon_shell::Console;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -50,6 +50,7 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
             console.program_started = false;
         }
         renderer.clear_color = out.clear_color;
+        renderer.filter = DisplayFilter::parse(console.filter_name()).unwrap_or_default();
         renderer.render(&out.cmds, Some(&out.grid), out.cursor_on);
         if console.wants_quit() {
             break;
@@ -63,8 +64,12 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
         println!("{}", console.screen_text());
     }
     if let Some(path) = &args.screenshot {
-        let (w, h) = renderer.size();
-        let pixels = renderer.read_composite();
+        let (w, h, pixels) = if args.scale <= 1 {
+            let (w, h) = renderer.size();
+            (w, h, renderer.read_composite())
+        } else {
+            renderer.read_display(args.scale)
+        };
         let img = image::RgbaImage::from_raw(w, h, pixels).ok_or_else(|| anyhow::anyhow!("bad framebuffer size"))?;
         img.save(path)?;
         eprintln!("wrote {} ({w}x{h})", path.display());

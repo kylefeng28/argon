@@ -15,6 +15,7 @@ pub enum ShellCmd {
     Exit,
 
     Theme(Option<String>),
+    Filter(Option<String>),
 
     Cd(Option<String>),
     Dir(Option<String>),
@@ -64,6 +65,7 @@ pub fn parse(line: &str) -> ShellCmd {
         "EXIT" => ShellCmd::Exit,
 
         "THEME" => ShellCmd::Theme(one()),
+        "FILTER" => ShellCmd::Filter(one()),
 
         "CD" => ShellCmd::Cd(one()),
         "DIR" | "LS" => ShellCmd::Dir(one()),

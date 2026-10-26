@@ -84,12 +84,12 @@ P2 = later phase.
 | FR-C1 | P0 | Argon is a single executable that opens one window and boots directly into the shell. |
 | FR-C2 | P0 | The virtual display has a per-cart resolution, default 640x360. Presets: `tiny` 128x128, `retro` 320x180, `classic` 640x360, `hd` 1280x720, `native`. Arbitrary `WxH` is also accepted. |
 | FR-C3 | P0 | The virtual display is integer-scaled to the largest multiple that fits the window, centered, with letterbox bars. Nearest-neighbor sampling. |
-| FR-C4 | P1 | Optional display filters selectable per cart or by the user: none, CRT scanlines, LCD grid, soft. |
+| FR-C4 | P1 | Optional display filters selectable per cart or by the user: none, glow (bloom), scanlines, neon (glow + vignette, default), crt (all three). Implemented in the presenter shader; headless screenshots at scale >= 2 include them. |
 | FR-C5 | P0 | Per-cart color mode: `truecolor` (default) or `palette = N` (2 <= N <= 256) with a user-defined palette. In palette mode color arguments are indices; in truecolor they are packed RGBA or `rgb()` values. |
 | FR-C6 | P0 | A text layer with a fixed character grid overlays the pixel framebuffer. Cell size is 8x12, so `classic` gives 80x30 cells. The shell and editor use the same text layer as programs. |
 | FR-C7 | P0 | Fullscreen toggle and window scaling without affecting the cart's virtual resolution. |
 | FR-C8 | P0 | The console never shows a mouse cursor. |
-| FR-C9 | P0 | User-selectable UI theme for shell and editor (at least: green phosphor, amber, blue, gray LCD) persisted across launches. |
+| FR-C9 | P0 | User-selectable UI theme for shell and editor persisted across launches. Default is `grid`: Tron: Legacy electric cyan on near-black blue with orange for errors and strings. Also: green phosphor, amber, blue, gray LCD. |
 | FR-C10 | P0 | Alternate screen: `alt_screen()` switches a program to a fresh framebuffer and text layer; the shell's screen (pixels and text) is restored when the program ends or calls `main_screen()`. Programs that do not call it leave their output on the shell screen, DOS-style. |
 
 ### 5.2 Shell

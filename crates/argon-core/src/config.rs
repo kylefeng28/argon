@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub struct Config {
     pub theme: String,
+    /// Display filter: none, glow, scanlines, neon, crt.
+    pub filter: String,
     /// Window scale factor at startup (integer multiple of the virtual
     /// resolution); 0 = fit screen.
     pub window_scale: u32,
@@ -23,6 +25,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             theme: "amber".to_string(),
+            filter: "neon".to_string(),
             window_scale: 0,
             fullscreen: false,
             disk: None,
@@ -124,6 +127,7 @@ pub struct Manifest {
     pub color: String,
     pub palette: Option<u32>,
     pub fps: u32,
+    /// Display filter override while the cart runs; empty = user's setting.
     pub filter: String,
 }
 
@@ -137,7 +141,7 @@ impl Default for Manifest {
             color: "truecolor".to_string(),
             palette: None,
             fps: 60,
-            filter: "none".to_string(),
+            filter: String::new(),
         }
     }
 }
