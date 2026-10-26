@@ -32,5 +32,8 @@ pub fn all() -> Vec<(&'static str, &'static str)> {
         demo!("mandelbrot.lua"),
         demo!("julia.lua"),
         demo!("hud.lua"),
+        demo!("life.lua"),
+        demo!("flock.lua"),
+        demo!("attractor.lua"),
     ]
 }
