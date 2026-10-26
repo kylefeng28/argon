@@ -1,7 +1,7 @@
 //! The windowed application (winit + wgpu).
 
 use crate::keymap;
-use argon_core::input::KeyCode;
+use argon_core::input::{KeyCode, MouseButton};
 use argon_gfx::{wgpu, DisplayFilter, FontMode, Gpu, PresentTarget, Renderer};
 use argon_shell::Console;
 use std::sync::Arc;
@@ -26,12 +26,14 @@ struct App {
     mods: ModifiersState,
     last_frame: Instant,
     startup_program: Option<String>,
+    /// Where the virtual screen sits in the window (x, y, w, h), for mouse mapping.
+    screen_rect: (f32, f32, f32, f32),
 }
 
 pub fn run(console: Console, startup_program: Option<String>) -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App { console, gfx: None, mods: ModifiersState::empty(), last_frame: Instant::now(), startup_program };
+    let mut app = App { console, gfx: None, mods: ModifiersState::empty(), last_frame: Instant::now(), startup_program, screen_rect: (0.0, 0.0, 1.0, 1.0) };
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -119,6 +121,8 @@ impl App {
         let (vw, vh) = g.renderer.size();
         let scale = (g.config.width / vw).min(g.config.height / vh).max(1);
         g.renderer.set_display_scale(scale);
+        let (dw, dh) = ((vw * scale) as f32, (vh * scale) as f32);
+        self.screen_rect = ((g.config.width as f32 - dw) / 2.0, (g.config.height as f32 - dh) / 2.0, dw, dh);
         g.renderer.set_font_mode(FontMode::parse(&self.console.config.font).unwrap_or_default());
         if self.console.program_started {
             g.renderer.reset_program_state();
@@ -171,6 +175,27 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.console.mouse_move(position.x as f32, position.y as f32, self.screen_rect);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let b = match button {
+                    winit::event::MouseButton::Left => Some(MouseButton::Left),
+                    winit::event::MouseButton::Right => Some(MouseButton::Right),
+                    winit::event::MouseButton::Middle => Some(MouseButton::Middle),
+                    _ => None,
+                };
+                if let Some(b) = b {
+                    self.console.mouse_button(b, state == ElementState::Pressed);
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => ((p.x / 40.0) as f32, (p.y / 40.0) as f32),
+                };
+                self.console.mouse_wheel(dx, dy);
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let ev = keymap::map_event(&event, self.mods);
                 // Host shortcuts: F11 / Alt+Enter fullscreen.

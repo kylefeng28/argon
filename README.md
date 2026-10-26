@@ -22,6 +22,7 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   Esc break within 100 ms, memory limit, readable errors with "did you mean"
   hints, seedable PRNG, per-program file jail, `save`/`load`, and
   `alt_screen()` so full-screen programs leave the shell untouched.
+- Mouse input for programs (position, buttons, wheel); Argon draws no cursor.
 - Audio: a chip-style synth (`beep`, `tone` on 8 channels, square/triangle/
   saw/sine/noise, envelopes, slides) plus WAV/OGG playback through cpal.
 - wgpu renderer: persistent 640x400 framebuffer (per-cart resolution),

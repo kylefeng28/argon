@@ -10,6 +10,10 @@ use argon_core::input::{KeyCode, KeyEvent, Modifiers};
 pub enum Step {
     Key(KeyEvent),
     Wait(u32),
+    /// Move the pointer to virtual pixel coordinates.
+    MouseMove(f32, f32),
+    MouseButton(argon_core::input::MouseButton, bool),
+    Wheel(f32),
 }
 
 pub fn parse(script: &str) -> Result<Vec<Step>, String> {
@@ -46,6 +50,27 @@ fn parse_token(tok: &str) -> Result<Vec<Step>, String> {
     let t = tok.trim().to_ascii_lowercase();
     if let Some(n) = t.strip_prefix("wait:") {
         return Ok(vec![Step::Wait(n.trim().parse().map_err(|_| format!("bad wait '{tok}'"))?)]);
+    }
+    if let Some(xy) = t.strip_prefix("mouse:") {
+        let (x, y) = xy.split_once(',').ok_or_else(|| format!("bad mouse position '{tok}'"))?;
+        let x: f32 = x.trim().parse().map_err(|_| format!("bad mouse x '{tok}'"))?;
+        let y: f32 = y.trim().parse().map_err(|_| format!("bad mouse y '{tok}'"))?;
+        return Ok(vec![Step::MouseMove(x, y)]);
+    }
+    if let Some(b) = t.strip_prefix("click:") {
+        let b = argon_core::input::MouseButton::from_name(b.trim()).ok_or_else(|| format!("bad mouse button '{tok}'"))?;
+        return Ok(vec![Step::MouseButton(b, true), Step::MouseButton(b, false)]);
+    }
+    if let Some(b) = t.strip_prefix("mousedown:") {
+        let b = argon_core::input::MouseButton::from_name(b.trim()).ok_or_else(|| format!("bad mouse button '{tok}'"))?;
+        return Ok(vec![Step::MouseButton(b, true)]);
+    }
+    if let Some(b) = t.strip_prefix("mouseup:") {
+        let b = argon_core::input::MouseButton::from_name(b.trim()).ok_or_else(|| format!("bad mouse button '{tok}'"))?;
+        return Ok(vec![Step::MouseButton(b, false)]);
+    }
+    if let Some(n) = t.strip_prefix("wheel:") {
+        return Ok(vec![Step::Wheel(n.trim().parse().map_err(|_| format!("bad wheel '{tok}'"))?)]);
     }
     if let Some(k) = t.strip_prefix("hold:") {
         let code = KeyCode::from_name(k.trim()).ok_or_else(|| format!("unknown key '{k}'"))?;

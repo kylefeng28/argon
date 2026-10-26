@@ -5,7 +5,7 @@ use crate::error::BREAK_MARKER;
 use crate::machine::{FlipError, Machine};
 use argon_audio::{AudioCmd, ToneParams, Wave};
 use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
-use argon_core::input::{KeyCode, PadButton};
+use argon_core::input::{KeyCode, MouseButton, PadButton};
 use argon_core::{Color, CELL_H, CELL_W};
 use mlua::{FromLua, Lua, LuaSerdeExt, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value};
 use std::cell::RefCell;
@@ -192,6 +192,13 @@ pub fn note_to_freq(name: &str) -> Option<f32> {
     let octave: i32 = if rest.is_empty() { 4 } else { rest.parse().ok()? };
     let midi = (octave + 1) * 12 + base + acc;
     Some(440.0 * 2f32.powf((midi - 69) as f32 / 12.0))
+}
+
+fn mouse_button_arg(name: Option<String>) -> mlua::Result<MouseButton> {
+    match name {
+        None => Ok(MouseButton::Left),
+        Some(n) => MouseButton::from_name(&n).ok_or_else(|| rt(format!("unknown mouse button '{n}'; use left, right or middle"))),
+    }
 }
 
 fn sprite_opts(opts: Option<Table>) -> mlua::Result<SpriteOpts> {
@@ -508,6 +515,20 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
         let b = PadButton::from_name(&name).ok_or_else(|| rt(format!("unknown button '{name}'")))?;
         Ok(mm.input.buttons_released.contains(&b))
     });
+    def!("mouse", |mm| { Ok((mm.input.mouse.x as f64, mm.input.mouse.y as f64, mm.input.mouse.inside)) });
+    def!("mouse_button", |mm, name: Option<String>| {
+        let b = mouse_button_arg(name)?;
+        Ok(mm.input.mouse.down.contains(&b))
+    });
+    def!("mouse_pressed", |mm, name: Option<String>| {
+        let b = mouse_button_arg(name)?;
+        Ok(mm.input.mouse.pressed.contains(&b))
+    });
+    def!("mouse_released", |mm, name: Option<String>| {
+        let b = mouse_button_arg(name)?;
+        Ok(mm.input.mouse.released.contains(&b))
+    });
+    def!("mouse_wheel", |mm| { Ok((mm.input.mouse.wheel as f64, mm.input.mouse.wheel_x as f64)) });
     def!("key", |mm, name: String| {
         let k = KeyCode::from_name(&name).ok_or_else(|| rt(format!("unknown key '{name}'")))?;
         Ok(mm.input.down.contains(&k))

@@ -55,6 +55,11 @@ pub static API_DOCS: &[ApiEntry] = &[
     entry!("key", Input, "key(name)", "Is a keyboard key held? e.g. 'a', 'space', 'enter', 'f1'.", "if key('space') then fire() end", "key(${name})"),
     entry!("key_pressed", Input, "key_pressed(name)", "Was the key pressed this frame?", "if key_pressed('p') then paused = not paused end", "key_pressed(${name})"),
     entry!("key_released", Input, "key_released(name)", "Was the key released this frame?", "if key_released('shift') then run = false end", "key_released(${name})"),
+    entry!("mouse", Input, "mouse()", "Pointer position in screen pixels and whether it is over the screen: x, y, inside. No cursor is drawn; draw your own.", "local mx, my = mouse() fill_circle(mx, my, 4)", "mouse()"),
+    entry!("mouse_button", Input, "mouse_button([button])", "Is a mouse button held? 'left' (default), 'right' or 'middle'.", "if mouse_button() then paint(mouse()) end", "mouse_button(${button})"),
+    entry!("mouse_pressed", Input, "mouse_pressed([button])", "Was the mouse button pressed this frame?", "if mouse_pressed('right') then erase() end", "mouse_pressed(${button})"),
+    entry!("mouse_released", Input, "mouse_released([button])", "Was the mouse button released this frame?", "if mouse_released() then drop() end", "mouse_released(${button})"),
+    entry!("mouse_wheel", Input, "mouse_wheel()", "Wheel movement this frame in notches (positive = away from you); second value is horizontal.", "zoom = zoom * 1.1 ^ mouse_wheel()", "mouse_wheel()"),
     // ---- Draw ----
     entry!("pixel", Draw, "pixel(x, y [, color])", "Set one pixel.", "pixel(10, 10, rgb(255, 255, 255))", "pixel(${x}, ${y})"),
     entry!("line", Draw, "line(x1, y1, x2, y2 [, color])", "Draw a line.", "line(0, 0, 639, 399)", "line(${x1}, ${y1}, ${x2}, ${y2})"),

@@ -34,6 +34,13 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
             while let Some(step) = steps.pop_front() {
                 match step {
                     Step::Key(ev) => console.key(ev),
+                    Step::MouseMove(x, y) => {
+                        // Headless: the window is exactly the virtual screen.
+                        let (vw, vh) = renderer.size();
+                        console.mouse_move(x, y, (0.0, 0.0, vw as f32, vh as f32));
+                    }
+                    Step::MouseButton(b, down) => console.mouse_button(b, down),
+                    Step::Wheel(n) => console.mouse_wheel(0.0, n),
                     Step::Wait(n) => {
                         wait = n;
                         break;

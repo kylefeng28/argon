@@ -1,5 +1,6 @@
 -- attractor: strange attractors drawn as glowing point clouds that slowly
 -- rotate in 3D. Z switches attractor, X toggles a hue sweep, arrows spin.
+-- Mouse: drag to rotate, wheel to zoom.
 alt_screen()
 local w, h = screen_size()
 
@@ -23,6 +24,8 @@ local x, y, z = 0.1, 0, 0
 local ax, ay = 0.3, 0
 local sweep = true
 local hue0 = 200
+local zoom = 1
+local last_mx, last_my = 0, 0
 
 local function reset()
   x, y, z = 0.1 + random() * 0.01, 0, 0
@@ -44,7 +47,16 @@ while true do
   if button("right") then ay = ay + 0.03 end
   if button("up") then ax = ax - 0.03 end
   if button("down") then ax = ax + 0.03 end
-  ay = ay + 0.004
+  local mx, my = mouse()
+  if mouse_pressed() then last_mx, last_my = mx, my end
+  if mouse_button() then
+    ay = ay + (mx - last_mx) * 0.01
+    ax = ax - (my - last_my) * 0.01
+    last_mx, last_my = mx, my
+  else
+    ay = ay + 0.004
+  end
+  zoom = clamp(zoom * 1.1 ^ mouse_wheel(), 0.3, 4)
   if sweep then hue0 = (hue0 + 0.3) % 360 end
 
   local s = systems[which]
@@ -68,13 +80,13 @@ while true do
     px, pz = px * cy_ + pz * sy_, -px * sy_ + pz * cy_
     py, pz = py * cx_ - pz * sx_, py * sx_ + pz * cx_
     local depth = 1 / (1 + pz / (s.scale * 6))
-    local sx, sy = w / 2 + px * s.scale * depth, h / 2 - py * s.scale * depth
+    local sx, sy = w / 2 + px * s.scale * zoom * depth, h / 2 - py * s.scale * zoom * depth
     local age = i / total
     local col = hsv((hue0 + age * 80 + pz) % 360, 0.85, 0.15 + 0.6 * age)
     if age > 0.97 then fill_rect(sx - 1, sy - 1, 2, 2, col) else pixel(sx, sy, col) end
   end
   blend("alpha")
   fill_rect(0, 0, 200, 14, rgb(2, 4, 12))
-  draw_text(4, -1, s.name .. "  Z next  X hue  ARROWS spin", rgb(150, 230, 255))
+  draw_text(4, -1, s.name .. "  Z next  X hue  drag/wheel", rgb(150, 230, 255))
   flip()
 end

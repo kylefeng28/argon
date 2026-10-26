@@ -52,6 +52,16 @@ Lua (Luau) file and nothing else unless asked. Follow these rules exactly.
   `"shift"`, `"ctrl"`, `"f1"`..`"f12"`. `read_key()` returns the next typed
   character (e.g. `"a"`, `"A"`, `"1"`) or a key name, or nil.
 
+## Mouse
+
+- `local x, y, inside = mouse()` gives the pointer in screen pixels. Argon
+  never draws a cursor: if the program uses the mouse, draw a crosshair at
+  (x, y) yourself.
+- `mouse_button([name])`, `mouse_pressed([name])`, `mouse_released([name])`
+  take `"left"` (default), `"right"` or `"middle"`.
+- `mouse_wheel()` returns the notches scrolled this frame (positive = away
+  from the user), e.g. `zoom = zoom * 1.1 ^ mouse_wheel()`.
+
 ## Sound
 
 - `beep(freq, duration, { wave = "square" })` plays one note; waves are
@@ -132,6 +142,16 @@ draw_image(img, x, y [, opts])  -- Draw a whole image. opts: scale, scale_x, sca
 draw_sprite(img, sx, sy, sw, sh, x, y [, opts])  -- Draw a rectangle of an image (a sprite from a sheet).
 draw_image_quad(img, x1, y1, x2, y2, x3, y3, x4, y4)  -- Draw an image stretched onto four corners.
 set_target(img) or set_target()  -- Draw into an image instead of the screen; set_target() goes back to the screen.
+
+## Mouse
+
+- `local x, y, inside = mouse()` gives the pointer in screen pixels. Argon
+  never draws a cursor: if the program uses the mouse, draw a crosshair at
+  (x, y) yourself.
+- `mouse_button([name])`, `mouse_pressed([name])`, `mouse_released([name])`
+  take `"left"` (default), `"right"` or `"middle"`.
+- `mouse_wheel()` returns the notches scrolled this frame (positive = away
+  from the user), e.g. `zoom = zoom * 1.1 ^ mouse_wheel()`.
 
 ## Sound
 beep(freq, duration [, opts])  -- Play a synth note. opts: wave (square, triangle, saw, sine, noise), volume 0-1, duty, slide (Hz/s), attack, release, pan.

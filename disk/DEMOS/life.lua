@@ -1,6 +1,7 @@
 -- life: Conway's Game of Life on a 160x100 grid, 4 px cells.
 -- Cells glow brighter the longer they live; the dead leave fading trails.
 -- Z pauses, X steps, C clears, R reseeds, 1-3 drop a glider gun / pulsar / R-pentomino.
+-- Mouse: left button paints live cells, right button erases, wheel changes speed.
 alt_screen()
 local w, h = screen_size()
 local cs = 4
@@ -84,6 +85,17 @@ while true do
   if key_pressed("3") then stamp(rpent, random(10, cols - 10), random(10, rows - 10)) end
   if button("up") then speed = math.min(speed + 1, 120) end
   if button("down") then speed = math.max(speed - 1, 1) end
+  speed = clamp(speed + mouse_wheel() * 4, 1, 120)
+  local mx, my, inside = mouse()
+  if inside and (mouse_button("left") or mouse_button("right")) then
+    local cx, cy = mx // cs, my // cs
+    for dy = -1, 1 do
+      for dx = -1, 1 do
+        local i = ((cy + dy) % rows) * cols + (cx + dx) % cols
+        if mouse_button("left") then alive[i] = 1 age[i] = 0 else alive[i] = 0 end
+      end
+    end
+  end
 
   if not paused then
     acc = acc + delta_time() * speed
@@ -110,5 +122,10 @@ while true do
   fill_rect(0, 0, w, 14, rgb(2, 6, 14))
   draw_text(4, -1, string.format("LIFE  gen %d  %d gen/s%s", gen, speed, paused and "  PAUSED" or ""), rgb(150, 230, 255))
   draw_text(w - 420, -1, "Z pause  X step  C clear  R seed  1 gun  2 pulsar  3 R", rgb(80, 130, 160))
+  if inside then
+    -- A crosshair where the mouse is (Argon draws no cursor).
+    local cx, cy = (mx // cs) * cs, (my // cs) * cs
+    rect(cx - cs, cy - cs, cs * 3, cs * 3, rgb(255, 255, 255))
+  end
   flip()
 end

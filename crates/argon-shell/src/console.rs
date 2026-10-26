@@ -7,7 +7,7 @@ use crate::shell::{self, ShellCmd};
 use argon_core::api::ApiTable;
 use argon_core::config::{Config, Manifest, Paths};
 use argon_core::draw::DrawCmd;
-use argon_core::input::{InputState, KeyCode, KeyEvent};
+use argon_core::input::{InputState, KeyCode, KeyEvent, MouseButton};
 use argon_core::vfs::{self, Jail, ProgramLocation};
 use argon_core::{Color, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use argon_audio::{AudioCmd, AudioEngine};
@@ -235,6 +235,26 @@ impl Console {
     }
 
     // ----- input ----------------------------------------------------------------------
+
+    /// Pointer position in window pixels; the host passes the rect the
+    /// virtual screen occupies so this maps it to virtual pixels. Only
+    /// running programs see the mouse (D5); the shell and editor ignore it.
+    pub fn mouse_move(&mut self, win_x: f32, win_y: f32, rect: (f32, f32, f32, f32)) {
+        let (rx, ry, rw, rh) = rect;
+        let (vw, vh) = (self.resolution.0 as f32, self.resolution.1 as f32);
+        let x = (win_x - rx) / rw.max(1.0) * vw;
+        let y = (win_y - ry) / rh.max(1.0) * vh;
+        let inside = x >= 0.0 && y >= 0.0 && x < vw && y < vh;
+        self.input.mouse_move(x, y, inside);
+    }
+
+    pub fn mouse_button(&mut self, b: MouseButton, pressed: bool) {
+        self.input.mouse_button(b, pressed);
+    }
+
+    pub fn mouse_wheel(&mut self, dx: f32, dy: f32) {
+        self.input.mouse_wheel(dx, dy);
+    }
 
     pub fn key(&mut self, ev: KeyEvent) {
         self.input.key_event(&ev);

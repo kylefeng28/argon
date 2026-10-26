@@ -135,6 +135,11 @@ PROGRAMS
     A=x, S=y, Q=l, W=r, Enter=start, Shift=select. Change them under
     [keymap.pad] in ~/.argon/config.toml, e.g. a = ["z", "k"].
 
+    Mouse: mouse() returns x, y, inside in screen pixels; mouse_button,
+    mouse_pressed, mouse_released take left/right/middle; mouse_wheel()
+    returns notches this frame. Argon draws no cursor; programs draw their
+    own. The shell and editor do not use the mouse.
+
     Files: read_file/write_file see only the program's own folder; save/load
     keep small values in SAVE/ between runs. require("name") loads name.lua
     from the program folder.
@@ -160,7 +165,8 @@ FUNCTIONS
     Text     print write locate text_color put_char get_char text_size
              cursor clear_text
     Input    input wait_key read_key button button_pressed button_released
-             key key_pressed key_released
+             key key_pressed key_released mouse mouse_button mouse_pressed
+             mouse_released mouse_wheel
     Draw     pixel line line_width rect fill_rect circle fill_circle ellipse
              fill_ellipse triangle fill_triangle polygon fill_polygon
              draw_text clip camera blend
@@ -188,7 +194,8 @@ HEADLESS
 
     Key scripts type plain characters; braces hold special keys and
     directives: {enter} {esc} {tab} {f5} {up} {ctrl+s} {shift+right}
-    {wait:30} (frames) {hold:z} {release:z}.
+    {wait:30} (frames) {hold:z} {release:z} {mouse:320,200} {click:left}
+    {mousedown:left} {mouseup:left} {wheel:1}.
 
 SEE ALSO
     docs/agent-guide.md     a compact description for code-generating models

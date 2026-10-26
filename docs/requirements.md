@@ -168,7 +168,7 @@ one API.
 | FR-I3 | P0 | Text input: `read_key()` pops the next typed character or special key (non-blocking, nil when empty); `wait_key()` blocks; `input(prompt)` reads a line with editing. |
 | FR-I4 | P0 | Input state is sampled once per `flip()` and is stable for the whole frame. |
 | FR-I5 | P1 | Gamepad support mapped onto the abstract pad; up to 4 players. |
-| FR-I6 | P2 | Mouse events reported to programs (position, buttons, wheel) in the terminal-emulator style; no cursor is ever drawn by Argon. |
+| FR-I6 | P2 | Mouse events reported to programs (position, buttons, wheel) in the terminal-emulator style; no cursor is ever drawn by Argon. Implemented: `mouse`, `mouse_button`, `mouse_pressed`, `mouse_released`, `mouse_wheel`; the shell and editor ignore the mouse. |
 
 ### 5.7 Audio
 

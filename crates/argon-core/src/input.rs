@@ -185,16 +185,76 @@ impl Default for KeyMap {
     }
 }
 
-/// Live keyboard state kept on the main thread and sampled into snapshots.
+/// Mouse buttons as programs name them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+impl MouseButton {
+    pub fn from_name(s: &str) -> Option<MouseButton> {
+        match s.to_ascii_lowercase().as_str() {
+            "left" | "1" => Some(MouseButton::Left),
+            "right" | "2" => Some(MouseButton::Right),
+            "middle" | "3" => Some(MouseButton::Middle),
+            _ => None,
+        }
+    }
+}
+
+/// Mouse state as seen by a program (FR-I6). Coordinates are in the
+/// program's virtual pixels; the shell and editor never look at this.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MouseState {
+    pub x: f32,
+    pub y: f32,
+    /// True while the pointer is over the virtual screen.
+    pub inside: bool,
+    pub down: HashSet<MouseButton>,
+    pub pressed: HashSet<MouseButton>,
+    pub released: HashSet<MouseButton>,
+    /// Wheel movement this frame in notches (positive = away from the user).
+    pub wheel: f32,
+    pub wheel_x: f32,
+}
+
+/// Live keyboard and mouse state kept on the main thread and sampled into
+/// snapshots.
 #[derive(Clone, Debug, Default)]
 pub struct InputState {
     pub down: HashSet<KeyCode>,
     pressed: HashSet<KeyCode>,
     released: HashSet<KeyCode>,
     typed: Vec<KeyEvent>,
+    mouse: MouseState,
 }
 
 impl InputState {
+    /// Pointer moved; coordinates already mapped to virtual pixels (may be
+    /// outside the screen when over the letterbox).
+    pub fn mouse_move(&mut self, x: f32, y: f32, inside: bool) {
+        self.mouse.x = x;
+        self.mouse.y = y;
+        self.mouse.inside = inside;
+    }
+
+    pub fn mouse_button(&mut self, b: MouseButton, pressed: bool) {
+        if pressed {
+            if self.mouse.down.insert(b) {
+                self.mouse.pressed.insert(b);
+            }
+        } else if self.mouse.down.remove(&b) {
+            self.mouse.released.insert(b);
+        }
+    }
+
+    pub fn mouse_wheel(&mut self, dx: f32, dy: f32) {
+        self.mouse.wheel += dy;
+        self.mouse.wheel_x += dx;
+    }
+
     pub fn key_event(&mut self, ev: &KeyEvent) {
         if ev.pressed {
             if !ev.repeat && self.down.insert(ev.code) {
@@ -224,6 +284,16 @@ impl InputState {
                 buttons_released.insert(*b);
             }
         }
+        let mouse = MouseState {
+            x: self.mouse.x,
+            y: self.mouse.y,
+            inside: self.mouse.inside,
+            down: self.mouse.down.clone(),
+            pressed: std::mem::take(&mut self.mouse.pressed),
+            released: std::mem::take(&mut self.mouse.released),
+            wheel: std::mem::take(&mut self.mouse.wheel),
+            wheel_x: std::mem::take(&mut self.mouse.wheel_x),
+        };
         InputSnapshot {
             down: self.down.clone(),
             pressed: std::mem::take(&mut self.pressed),
@@ -232,6 +302,7 @@ impl InputState {
             buttons,
             buttons_pressed,
             buttons_released,
+            mouse,
         }
     }
 
@@ -240,6 +311,8 @@ impl InputState {
         self.pressed.clear();
         self.released.clear();
         self.typed.clear();
+        let (x, y, inside) = (self.mouse.x, self.mouse.y, self.mouse.inside);
+        self.mouse = MouseState { x, y, inside, ..Default::default() };
     }
 }
 
@@ -254,6 +327,7 @@ pub struct InputSnapshot {
     pub buttons: HashSet<PadButton>,
     pub buttons_pressed: HashSet<PadButton>,
     pub buttons_released: HashSet<PadButton>,
+    pub mouse: MouseState,
 }
 
 #[cfg(test)]
@@ -265,6 +339,23 @@ mod tests {
         for k in ALL_KEYS {
             assert_eq!(KeyCode::from_name(k.name()), Some(*k), "{k:?}");
         }
+    }
+
+    #[test]
+    fn mouse_edges_and_wheel_accumulate_per_frame() {
+        let mut st = InputState::default();
+        let km = KeyMap::default();
+        st.mouse_move(10.0, 20.0, true);
+        st.mouse_button(MouseButton::Left, true);
+        st.mouse_wheel(0.0, 1.0);
+        st.mouse_wheel(0.0, 2.0);
+        let s1 = st.snapshot(&km);
+        assert_eq!((s1.mouse.x, s1.mouse.y), (10.0, 20.0));
+        assert!(s1.mouse.pressed.contains(&MouseButton::Left) && s1.mouse.down.contains(&MouseButton::Left));
+        assert_eq!(s1.mouse.wheel, 3.0);
+        let s2 = st.snapshot(&km);
+        assert!(!s2.mouse.pressed.contains(&MouseButton::Left) && s2.mouse.down.contains(&MouseButton::Left));
+        assert_eq!(s2.mouse.wheel, 0.0);
     }
 
     #[test]
