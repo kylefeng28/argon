@@ -191,11 +191,16 @@ indices on the CPU; `get_pixel` returns the nearest palette index.
 
 ### 5.1 Engine
 
-`mlua` with the `luau` feature. Luau gives: a fast interpreter (2 to 3x PUC Lua),
+`mlua` with the `luau` and `luau-jit` features. Luau gives: a fast interpreter (2 to 3x PUC Lua),
 gradual typing (optional for users, useful for our own code), a sandbox
 designed for untrusted scripts (no `load` of bytecode, read-only globals,
 built-in interrupt callback), and good error messages. Fallback: `lua54`
 feature if a Luau limitation bites; the API layer does not depend on which.
+
+Native code generation is enabled for every chunk (`enable_jit`) together
+with compiler optimization level 2; a Mandelbrot-style inner loop runs about
+2x faster than the interpreter. Set `ARGON_NO_JIT=1` to disable it for
+comparison. Interrupts (Esc) still fire inside JIT-compiled loops.
 
 ### 5.2 Sandbox (FR-R1, FR-R2, NFR-6)
 

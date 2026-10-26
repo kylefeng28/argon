@@ -25,7 +25,7 @@ wgpu = "24"
 winit = "0.30"
 pollster = "0.4"
 bytemuck = { version = "1.21", features = ["derive"] }
-mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
+mlua = { version = "0.10", features = ["luau", "luau-jit", "vendored", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }

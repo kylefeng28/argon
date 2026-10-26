@@ -47,6 +47,11 @@ impl Runtime {
         let libs = StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::UTF8 | StdLib::COROUTINE | StdLib::BIT;
         let lua = Lua::new_with(libs, LuaOptions::new().catch_rust_panics(true))?;
         lua.set_memory_limit(DEFAULT_MEMORY_LIMIT)?;
+        // Optimization level 2 inlines small functions and unrolls loops;
+        // native code generation (the Luau JIT) is on for every chunk unless
+        // ARGON_NO_JIT is set, which is handy for comparing speed.
+        lua.set_compiler(mlua::Compiler::new().set_optimization_level(2).set_debug_level(1));
+        lua.enable_jit(std::env::var_os("ARGON_NO_JIT").is_none());
 
         let immediate = opts.immediate;
         let machine = Rc::new(RefCell::new(Machine::new(opts, jail, save_jail, break_flag.clone(), flip)));

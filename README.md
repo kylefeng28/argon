@@ -17,7 +17,8 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
 - Full-screen editor: syntax highlighting, undo/redo, selection, find/replace,
   go to line, F1 catalog and F2/F4/F6/F7/F8/F9 insert menus with tab-through
   placeholders, F5 save-and-run with the cursor jumping to the error line.
-- Sandboxed Luau runtime on its own thread with the linear `flip()` model,
+- Sandboxed Luau runtime (native code generation on, optimization level 2;
+  `ARGON_NO_JIT=1` to compare) on its own thread with the linear `flip()` model,
   Esc break within 100 ms, memory limit, readable errors with "did you mean"
   hints, seedable PRNG, per-program file jail, `save`/`load`, and
   `alt_screen()` so full-screen programs leave the shell untouched.
