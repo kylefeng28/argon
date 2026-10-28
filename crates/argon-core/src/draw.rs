@@ -6,6 +6,37 @@ use crate::color::Color;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ImageId(pub u32);
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ShaderId(pub u32);
+
+/// Per-draw inputs for a shader: which images feed iChannel0..3, user
+/// uniform values by slot, and the Shadertoy globals the program knows
+/// (time, mouse). The renderer fills resolution and offset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderInputs {
+    pub channels: [Option<ImageId>; 4],
+    pub user: [[f32; 4]; crate::shader::MAX_USER_UNIFORMS],
+    pub time: f32,
+    pub time_delta: f32,
+    pub frame: i32,
+    pub frame_rate: f32,
+    pub mouse: [f32; 4],
+}
+
+impl Default for ShaderInputs {
+    fn default() -> Self {
+        ShaderInputs {
+            channels: [None; 4],
+            user: [[0.0; 4]; crate::shader::MAX_USER_UNIFORMS],
+            time: 0.0,
+            time_delta: 1.0 / 60.0,
+            frame: 0,
+            frame_rate: 60.0,
+            mouse: [0.0; 4],
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Rect {
     pub x: f32,
@@ -102,6 +133,13 @@ pub enum DrawCmd {
     SaveScreen,
     /// Copy the saved buffer back onto the screen framebuffer.
     RestoreScreen,
+    /// Register a compiled fragment shader.
+    CreateShader { id: ShaderId, shader: std::sync::Arc<crate::shader::CompiledShader> },
+    DestroyShader(ShaderId),
+    /// Run a shader over the whole target or a rectangle of it.
+    DrawShader { id: ShaderId, rect: Option<Rect>, inputs: ShaderInputs },
+    /// Apply a shader to subsequent primitive/sprite draws (`None` = off).
+    SetShader { id: Option<ShaderId>, inputs: ShaderInputs },
 }
 
 /// Everything the renderer needs for one frame.

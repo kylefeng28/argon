@@ -2,7 +2,8 @@
 //!
 //! Plain characters are typed. Braces hold special keys and directives:
 //! `{enter}` `{esc}` `{f5}` `{tab}` `{up}` `{ctrl+s}` `{shift+right}`
-//! `{wait:30}` (frames) `{hold:z}` `{release:z}`.
+//! `{wait:30}` (frames) `{hold:z}` `{release:z}`; mouse: `{mouse:320,200}`
+//! (virtual pixels) `{click:left}` `{mousedown:left}` `{mouseup:left}` `{wheel:1}`.
 
 use argon_core::input::{KeyCode, KeyEvent, Modifiers};
 

@@ -22,7 +22,10 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   Esc break within 100 ms, memory limit, readable errors with "did you mean"
   hints, seedable PRNG, per-program file jail, `save`/`load`, and
   `alt_screen()` so full-screen programs leave the shell untouched.
-- Mouse input for programs (position, buttons, wheel); Argon draws no cursor.
+- Shaders: Shadertoy-style GLSL fragment shaders compiled with naga at
+  runtime (`mainImage`, `iTime`, `iMouse`, `iChannel0..3`, your own
+  `uniform` declarations); run full-screen, over a rect, or applied to sprite
+  batches; errors report the shader's own line numbers.
 - Audio: a chip-style synth (`beep`, `tone` on 8 channels, square/triangle/
   saw/sine/noise, envelopes, slides) plus WAV/OGG playback through cpal.
 - wgpu renderer: persistent 640x400 framebuffer (per-cart resolution),
@@ -37,10 +40,9 @@ Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
   - `FILTER` presets: none/glow/scanlines/neon/crt
   - Filters: The `neon` display filter gives bright strokes a white-hot core, a colored halo and a glass-like specular rim, the light ribbon look; `glow`, `glass`, `scanlines` and `crt` are also available (`FILTER`).
   - Font: Text is Share Tech Mono rasterized at the window's scale (so it stays sharp), with ProggyClean and the Unscii bitmap font as alternatives (`FONT`).
-- 24 demo programs in `DEMOS/`: light cycles, Game of Life, flocking boids, strange attractors, a progressive Mandelbrot and an animated Julia set, a tactical HUD, matrix rain, the Tetris theme as a chiptune, a software-rendered 3D cube, and more.
+- 28 demo programs in `DEMOS/`: GPU Mandelbrot and Julia, a raymarched SDF scene, shader post-processing, light cycles, Game of Life, flocking boids, strange attractors, a progressive Mandelbrot and an animated Julia set, a tactical HUD, matrix rain, the Tetris theme as a chiptune, a software-rendered 3D cube, and more.
 
-Not yet: palette mode, user shaders (Tier 2), gamepads, mouse events,
-`.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
+Not yet: palette mode, gamepads, `.argon` zip export, browser build. See `docs/api-sketch.md` for the API.
 
 ## Build and run
 

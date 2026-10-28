@@ -62,6 +62,27 @@ Lua (Luau) file and nothing else unless asked. Follow these rules exactly.
 - `mouse_wheel()` returns the notches scrolled this frame (positive = away
   from the user), e.g. `zoom = zoom * 1.1 ^ mouse_wheel()`.
 
+## Shaders (GPU)
+
+- `local sh = load_shader(src)` compiles Shadertoy-style GLSL: the shader
+  defines `void mainImage(out vec4 fragColor, in vec2 fragCoord)` and may use
+  `iResolution`, `iTime`, `iTimeDelta`, `iFrame`, `iMouse`, `iChannel0..3`.
+  Declare your own inputs as `uniform float speed;` (also vec2/vec3/vec4/
+  int/bool) at the top of the shader.
+- `draw_shader(sh, { uniforms = { speed = 2, center = {x, y} }, channels =
+  { img }, rect = {x, y, w, h} })` runs it over the screen (or the rect).
+  Channel images are sampled bottom-up like Shadertoy, so an image drawn
+  with `texture(iChannel0, fragCoord / iResolution.xy)` appears upright.
+- `set_shader(sh)` ... `set_shader()` applies a shader to sprites and shapes
+  drawn in between; inside it `vUv` and `vColor` are the sprite's texture
+  coordinate and tint, and `iChannel0` is its texture (sample with
+  `textureTopDown(iChannel0, vUv)`).
+- `shader_source("plasma" | "ripple" | "pixelate" | "scanlines" | "tint")`
+  returns ready-made GLSL to load or copy.
+- Fragment shaders cannot read the screen; draw the scene into an image with
+  `set_target(img)` and pass it as a channel for post-processing.
+- Mandelbrot/Julia/raymarching belong in a shader, not in Lua loops.
+
 ## Sound
 
 - `beep(freq, duration, { wave = "square" })` plays one note; waves are
@@ -152,6 +173,27 @@ set_target(img) or set_target()  -- Draw into an image instead of the screen; se
   take `"left"` (default), `"right"` or `"middle"`.
 - `mouse_wheel()` returns the notches scrolled this frame (positive = away
   from the user), e.g. `zoom = zoom * 1.1 ^ mouse_wheel()`.
+
+## Shaders (GPU)
+
+- `local sh = load_shader(src)` compiles Shadertoy-style GLSL: the shader
+  defines `void mainImage(out vec4 fragColor, in vec2 fragCoord)` and may use
+  `iResolution`, `iTime`, `iTimeDelta`, `iFrame`, `iMouse`, `iChannel0..3`.
+  Declare your own inputs as `uniform float speed;` (also vec2/vec3/vec4/
+  int/bool) at the top of the shader.
+- `draw_shader(sh, { uniforms = { speed = 2, center = {x, y} }, channels =
+  { img }, rect = {x, y, w, h} })` runs it over the screen (or the rect).
+  Channel images are sampled bottom-up like Shadertoy, so an image drawn
+  with `texture(iChannel0, fragCoord / iResolution.xy)` appears upright.
+- `set_shader(sh)` ... `set_shader()` applies a shader to sprites and shapes
+  drawn in between; inside it `vUv` and `vColor` are the sprite's texture
+  coordinate and tint, and `iChannel0` is its texture (sample with
+  `textureTopDown(iChannel0, vUv)`).
+- `shader_source("plasma" | "ripple" | "pixelate" | "scanlines" | "tint")`
+  returns ready-made GLSL to load or copy.
+- Fragment shaders cannot read the screen; draw the scene into an image with
+  `set_target(img)` and pass it as a channel for post-processing.
+- Mandelbrot/Julia/raymarching belong in a shader, not in Lua loops.
 
 ## Sound
 beep(freq, duration [, opts])  -- Play a synth note. opts: wave (square, triangle, saw, sine, noise), volume 0-1, duty, slide (Hz/s), attack, release, pan.

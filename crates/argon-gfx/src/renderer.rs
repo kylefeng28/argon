@@ -1,5 +1,6 @@
 use crate::atlas::{Atlas, FontMode, Fonts};
-use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
+use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, ShaderId, ShaderInputs, SpriteOpts};
+use argon_core::shader::{bytemuck_lite, ShaderGlobals, MAX_USER_UNIFORMS};
 use argon_core::raster::{self, Span};
 use argon_core::{Color, TextGrid, CELL_H, CELL_W};
 use std::collections::HashMap;
@@ -94,8 +95,30 @@ struct Batch {
     blend: BlendMode,
     clip: Option<Rect>,
     tex: TexKey,
+    /// Index into `shader_draws` when a user shader applies.
+    shader: Option<usize>,
     start: u32,
     end: u32,
+}
+
+/// One use of a user shader this frame: which shader, its inputs, and the
+/// rect it covers (for iResolution/iOffset).
+struct ShaderDraw {
+    id: ShaderId,
+    inputs: ShaderInputs,
+    /// None = whole target.
+    rect: Option<Rect>,
+}
+
+struct GpuShader {
+    module: wgpu::ShaderModule,
+    pipelines: HashMap<(BlendMode, wgpu::TextureFormat), wgpu::RenderPipeline>,
+}
+
+/// Uniform buffers for one shader draw; reused across frames.
+struct ShaderSlot {
+    globals: wgpu::Buffer,
+    user: wgpu::Buffer,
 }
 
 /// Mutable draw state carried across commands and frames.
@@ -106,11 +129,13 @@ struct DrawState {
     blend: BlendMode,
     target: Option<ImageId>,
     line_width: u32,
+    /// Active `set_shader` draw index.
+    shader: Option<usize>,
 }
 
 impl Default for DrawState {
     fn default() -> Self {
-        DrawState { clip: None, camera: (0.0, 0.0), blend: BlendMode::Alpha, target: None, line_width: 1 }
+        DrawState { clip: None, camera: (0.0, 0.0), blend: BlendMode::Alpha, target: None, line_width: 1, shader: None }
     }
 }
 
@@ -189,6 +214,15 @@ pub struct Renderer {
     /// Copy of the framebuffer taken by `SaveScreen`.
     saved_screen: Option<TexBundle>,
     images: HashMap<ImageId, TexBundle>,
+    shaders: HashMap<ShaderId, GpuShader>,
+    /// GLSL vertex stage used with user fragment shaders.
+    shader_vs: wgpu::ShaderModule,
+    shader_bgl: wgpu::BindGroupLayout,
+    shader_layout: wgpu::PipelineLayout,
+    shader_draws: Vec<ShaderDraw>,
+    shader_slots: Vec<ShaderSlot>,
+    /// 1x1 black texture bound to unused channels.
+    black: TexBundle,
     vbuf: wgpu::Buffer,
     verts: Vec<Vertex>,
     batches: Vec<Batch>,
@@ -297,6 +331,55 @@ impl Renderer {
 
         let framebuffer = create_texture(device, &bgl, &sampler, width, height, Some("framebuffer"));
         let composite = create_texture(device, &bgl, &sampler, width, height, Some("composite"));
+        let black = create_texture(device, &bgl, &sampler, 1, 1, Some("black"));
+        gpu.queue.write_texture(
+            black.texture.as_image_copy(),
+            &[0, 0, 0, 255],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: None },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let mut shader_entries = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+        ];
+        for c in 0..4u32 {
+            shader_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 + c * 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            shader_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 3 + c * 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        let shader_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("argon-shader"), entries: &shader_entries });
+        let shader_vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("argon-shader-vs"),
+            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(argon_core::shader::vertex_module())),
+        });
+        let shader_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("argon-shader"),
+            bind_group_layouts: &[&shader_bgl],
+            push_constant_ranges: &[],
+        });
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("verts"),
             size: 1 << 20,
@@ -329,6 +412,13 @@ impl Renderer {
             composite,
             saved_screen: None,
             images: HashMap::new(),
+            shaders: HashMap::new(),
+            shader_vs,
+            shader_bgl,
+            shader_layout,
+            shader_draws: Vec::new(),
+            shader_slots: Vec::new(),
+            black,
             vbuf,
             verts: Vec::new(),
             batches: Vec::new(),
@@ -405,6 +495,7 @@ impl Renderer {
     pub fn reset_program_state(&mut self) {
         self.state = DrawState::default();
         self.images.clear();
+        self.shaders.clear();
     }
 
     pub fn clear_framebuffer(&mut self, color: Color) {
@@ -416,45 +507,7 @@ impl Renderer {
     fn pipeline(&mut self, blend: BlendMode, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
         let key = (blend, format);
         if !self.pipelines.contains_key(&key) {
-            let blend_state = match blend {
-                BlendMode::Alpha => wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                },
-                BlendMode::Add => wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Zero,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                },
-                BlendMode::Multiply => wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Dst,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Zero,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                },
-                BlendMode::Replace => wgpu::BlendState::REPLACE,
-            };
+            let blend_state = blend_state_for(blend);
             let p = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("argon-batch"),
                 layout: Some(&self.pipeline_layout),
@@ -502,16 +555,16 @@ impl Renderer {
         let start = self.verts.len() as u32;
         let st = self.state;
         if let Some(last) = self.batches.last_mut() {
-            if last.tex == tex && last.blend == st.blend && last.target == st.target && last.clip == st.clip {
+            if last.tex == tex && last.blend == st.blend && last.target == st.target && last.clip == st.clip && last.shader == st.shader {
                 return;
             }
             if last.start == last.end && !last.tex.is_marker() {
                 // Empty batch: just retarget it.
-                *last = Batch { target: st.target, blend: st.blend, clip: st.clip, tex, start, end: start };
+                *last = Batch { target: st.target, blend: st.blend, clip: st.clip, tex, shader: st.shader, start, end: start };
                 return;
             }
         }
-        self.batches.push(Batch { target: st.target, blend: st.blend, clip: st.clip, tex, start, end: start });
+        self.batches.push(Batch { target: st.target, blend: st.blend, clip: st.clip, tex, shader: st.shader, start, end: start });
     }
 
     fn end_batch(&mut self) {
@@ -581,10 +634,53 @@ impl Renderer {
                 self.state.target = t.filter(|id| self.images.contains_key(id));
             }
             DrawCmd::SetLineWidth(w) => self.state.line_width = (*w).max(1),
+            DrawCmd::CreateShader { id, shader } => {
+                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("argon-user-shader"),
+                    source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(shader.module.clone())),
+                });
+                self.shaders.insert(*id, GpuShader { module, pipelines: HashMap::new() });
+            }
+            DrawCmd::DestroyShader(id) => {
+                self.shaders.remove(id);
+            }
+            DrawCmd::SetShader { id, inputs } => {
+                self.state.shader = match id {
+                    Some(id) if self.shaders.contains_key(id) => {
+                        self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: None });
+                        Some(self.shader_draws.len() - 1)
+                    }
+                    _ => None,
+                };
+            }
+            DrawCmd::DrawShader { id, rect, inputs } => {
+                if !self.shaders.contains_key(id) {
+                    return;
+                }
+                let (tw, th) = self.target_size();
+                let r = rect.unwrap_or(Rect::new(0.0, 0.0, tw as f32, th as f32));
+                self.shader_draws.push(ShaderDraw { id: *id, inputs: inputs.clone(), rect: Some(r) });
+                let saved = self.state.shader;
+                self.state.shader = Some(self.shader_draws.len() - 1);
+                self.begin_batch(TexKey::Atlas);
+                let w = self.atlas.white_uv();
+                let (cx, cy) = self.state.camera;
+                let (x0, y0, x1, y1) = (r.x + cx, r.y + cy, r.x + r.w + cx, r.y + r.h + cy);
+                self.quad_px(
+                    [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                    Color::WHITE,
+                    tw,
+                    th,
+                );
+                let _ = w;
+                self.end_batch();
+                self.state.shader = saved;
+            }
             DrawCmd::SaveScreen | DrawCmd::RestoreScreen => {
                 let tex = if matches!(cmd, DrawCmd::SaveScreen) { TexKey::SaveScreen } else { TexKey::RestoreScreen };
                 let start = self.verts.len() as u32;
-                self.batches.push(Batch { target: None, blend: self.state.blend, clip: None, tex, start, end: start });
+                self.batches.push(Batch { target: None, blend: self.state.blend, clip: None, tex, shader: None, start, end: start });
             }
             DrawCmd::CreateImage { id, width, height, pixels } => {
                 let tex = create_texture(&self.gpu.device, &self.bgl, &self.sampler, *width, *height, Some("image"));
@@ -727,9 +823,14 @@ impl Renderer {
     pub fn render(&mut self, cmds: &[DrawCmd], grid: Option<&TextGrid>, cursor_on: bool) {
         self.verts.clear();
         self.batches.clear();
+        self.shader_draws.clear();
+        // A set_shader left active from last frame stays active, but its
+        // inputs were recorded in last frame's list; drop it to be safe.
+        self.state.shader = None;
         for c in cmds {
             self.record(c);
         }
+        self.upload_shader_slots();
         let program_vert_end = self.verts.len() as u32;
         let program_batches = std::mem::take(&mut self.batches);
 
@@ -770,9 +871,19 @@ impl Renderer {
             while j < program_batches.len() && program_batches[j].target == target && !program_batches[j].tex.is_marker() {
                 j += 1;
             }
-            // Pipelines must exist before we borrow views for the pass.
+            // Pipelines and bind groups must exist before we borrow views.
+            let mut shader_bgs: HashMap<usize, Option<wgpu::BindGroup>> = HashMap::new();
             for b in &program_batches[i..j] {
-                self.pipeline(b.blend, FB_FORMAT);
+                match b.shader {
+                    None => {
+                        self.pipeline(b.blend, FB_FORMAT);
+                    }
+                    Some(sd) => {
+                        self.shader_pipeline(sd, b.blend, FB_FORMAT);
+                        let bg = self.shader_bind_group(sd, b.tex, target);
+                        shader_bgs.insert(sd, bg);
+                    }
+                }
             }
             let (view, tsz) = match target {
                 Some(id) => match self.images.get(&id) {
@@ -799,14 +910,25 @@ impl Renderer {
                     if b.start == b.end {
                         continue;
                     }
-                    let Some(bg) = self.bind_group(b.tex) else { continue };
                     let (sx, sy, sw, sh) = clip_to_scissor(b.clip, tsz);
                     if sw == 0 || sh == 0 {
                         continue;
                     }
                     pass.set_scissor_rect(sx, sy, sw, sh);
-                    pass.set_pipeline(&self.pipelines[&(b.blend, FB_FORMAT)]);
-                    pass.set_bind_group(0, bg, &[]);
+                    match b.shader {
+                        None => {
+                            let Some(bg) = self.bind_group(b.tex) else { continue };
+                            pass.set_pipeline(&self.pipelines[&(b.blend, FB_FORMAT)]);
+                            pass.set_bind_group(0, bg, &[]);
+                        }
+                        Some(sd) => {
+                            let Some(Some(bg)) = shader_bgs.get(&sd) else { continue };
+                            let id = self.shader_draws[sd].id;
+                            let Some(p) = self.shaders.get(&id).and_then(|g| g.pipelines.get(&(b.blend, FB_FORMAT))) else { continue };
+                            pass.set_pipeline(p);
+                            pass.set_bind_group(0, bg, &[]);
+                        }
+                    }
                     pass.draw(b.start..b.end, 0..1);
                 }
             }
@@ -841,6 +963,112 @@ impl Renderer {
             }
         }
         self.gpu.queue.submit([enc.finish()]);
+    }
+
+    fn shader_pipeline(&mut self, draw: usize, blend: BlendMode, format: wgpu::TextureFormat) {
+        let id = self.shader_draws[draw].id;
+        let Some(gs) = self.shaders.get(&id) else { return };
+        if gs.pipelines.contains_key(&(blend, format)) {
+            return;
+        }
+        let blend_state = blend_state_for(blend);
+        let p = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("argon-user-shader"),
+            layout: Some(&self.shader_layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader_vs,
+                entry_point: Some("main"),
+                buffers: &[Vertex::LAYOUT],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gs.module,
+                entry_point: Some("main"),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(blend_state), write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.shaders.get_mut(&id).unwrap().pipelines.insert((blend, format), p);
+    }
+
+    /// Write globals/user uniforms for every shader draw recorded this frame.
+    fn upload_shader_slots(&mut self) {
+        while self.shader_slots.len() < self.shader_draws.len() {
+            let mk = |label: &str, size: u64| {
+                self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.shader_slots.push(ShaderSlot {
+                globals: mk("shader-globals", std::mem::size_of::<ShaderGlobals>() as u64),
+                user: mk("shader-user", (MAX_USER_UNIFORMS * 16) as u64),
+            });
+        }
+        for (i, d) in self.shader_draws.iter().enumerate() {
+            let (tw, th) = (self.width, self.height);
+            let (res, off) = match d.rect {
+                Some(r) => ([r.w, r.h, 1.0], [r.x, r.y, 0.0, 0.0]),
+                None => ([tw as f32, th as f32, 1.0], [0.0; 4]),
+            };
+            let mut chres = [[0.0f32; 4]; 4];
+            for (c, ch) in d.inputs.channels.iter().enumerate() {
+                if let Some(t) = ch.and_then(|id| self.images.get(&id)) {
+                    chres[c] = [t.w as f32, t.h as f32, 1.0, 0.0];
+                }
+            }
+            let g = ShaderGlobals {
+                resolution: res,
+                time: d.inputs.time,
+                time_delta: d.inputs.time_delta,
+                frame: d.inputs.frame,
+                frame_rate: d.inputs.frame_rate,
+                sample_rate: 44100.0,
+                mouse: d.inputs.mouse,
+                date: [0.0; 4],
+                offset: off,
+                channel_resolution: chres,
+            };
+            self.gpu.queue.write_buffer(&self.shader_slots[i].globals, 0, bytemuck_lite::bytes_of(&g));
+            let user: &[u8] = bytemuck::cast_slice(&d.inputs.user);
+            self.gpu.queue.write_buffer(&self.shader_slots[i].user, 0, user);
+        }
+    }
+
+    /// Bind group for one shader draw. Channel 0 defaults to the batch's own
+    /// texture (the sprite sheet in `set_shader` mode).
+    fn shader_bind_group(&self, draw: usize, batch_tex: TexKey, _target: Option<ImageId>) -> Option<wgpu::BindGroup> {
+        let d = &self.shader_draws[draw];
+        let slot = self.shader_slots.get(draw)?;
+        let mut views: Vec<&wgpu::TextureView> = Vec::with_capacity(4);
+        for (c, ch) in d.inputs.channels.iter().enumerate() {
+            let v = match ch.and_then(|id| self.images.get(&id)) {
+                Some(t) => &t.view,
+                None if c == 0 && d.rect.is_none() => match batch_tex {
+                    TexKey::Image(id) => self.images.get(&id).map(|t| &t.view).unwrap_or(&self.black.view),
+                    TexKey::Atlas => &self.atlas_tex.view,
+                    _ => &self.black.view,
+                },
+                None => &self.black.view,
+            };
+            views.push(v);
+        }
+        let mut entries = vec![
+            wgpu::BindGroupEntry { binding: 0, resource: slot.globals.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: slot.user.as_entire_binding() },
+        ];
+        for (c, v) in views.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry { binding: 2 + c as u32 * 2, resource: wgpu::BindingResource::TextureView(v) });
+            entries.push(wgpu::BindGroupEntry { binding: 3 + c as u32 * 2, resource: wgpu::BindingResource::Sampler(&self.sampler) });
+        }
+        Some(self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("argon-shader"), layout: &self.shader_bgl, entries: &entries }))
     }
 
     /// Alt screen support: copy the framebuffer to the saved buffer or back.
@@ -1064,6 +1292,48 @@ impl Renderer {
         drop(data);
         buf.unmap();
         out
+    }
+}
+
+fn blend_state_for(blend: BlendMode) -> wgpu::BlendState {
+    match blend {
+        BlendMode::Alpha => wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+        },
+        BlendMode::Add => wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+        },
+        BlendMode::Multiply => wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Dst,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+        },
+        BlendMode::Replace => wgpu::BlendState::REPLACE,
     }
 }
 

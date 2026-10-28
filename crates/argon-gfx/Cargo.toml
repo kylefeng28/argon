@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 argon-core = { workspace = true }
-wgpu = { workspace = true }
+wgpu = { workspace = true, features = ["naga-ir"] }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
 fontdue = "0.9"

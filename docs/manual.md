@@ -140,6 +140,12 @@ PROGRAMS
     returns notches this frame. Argon draws no cursor; programs draw their
     own. The shell and editor do not use the mouse.
 
+    Shaders: load_shader(glsl) compiles a Shadertoy-style fragment shader
+    (mainImage, iResolution, iTime, iMouse, iChannel0-3, plus your own
+    uniform declarations); draw_shader runs it over the screen or a rect,
+    set_shader applies it to sprites and shapes. shader_source(name) gives
+    built-in examples. Compile errors report the shader's line number.
+
     Files: read_file/write_file see only the program's own folder; save/load
     keep small values in SAVE/ between runs. require("name") loads name.lua
     from the program folder.
@@ -172,6 +178,7 @@ FUNCTIONS
              draw_text clip camera blend
     Image    load_image new_image image_size draw_image draw_sprite
              draw_image_quad set_target
+    GPU      load_shader draw_shader set_shader set_uniform shader_source
     Sound    beep tone note_freq load_sound play_sound set_voice stop_sound
              stop_all_sounds set_volume
     File     read_file write_file append_file file_exists delete_file

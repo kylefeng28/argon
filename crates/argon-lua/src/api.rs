@@ -4,8 +4,10 @@
 use crate::error::BREAK_MARKER;
 use crate::machine::{FlipError, Machine};
 use argon_audio::{AudioCmd, ToneParams, Wave};
-use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, SpriteOpts};
+use argon_core::draw::{BlendMode, DrawCmd, ImageId, Rect, ShaderId, ShaderInputs, SpriteOpts};
 use argon_core::input::{KeyCode, MouseButton, PadButton};
+use argon_core::shader::{CompiledShader, UniformType, MAX_USER_UNIFORMS};
+
 use argon_core::{Color, CELL_H, CELL_W};
 use mlua::{FromLua, Lua, LuaSerdeExt, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value};
 use std::cell::RefCell;
@@ -108,6 +110,91 @@ impl FromLua for LuaSound {
             }),
         }
     }
+}
+
+/// Shader handle exposed to Lua.
+#[derive(Clone)]
+pub struct LuaShader {
+    pub id: ShaderId,
+    pub compiled: std::sync::Arc<CompiledShader>,
+}
+
+impl UserData for LuaShader {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method("__tostring", |_, s, ()| Ok(format!("shader({} uniforms)", s.compiled.uniforms.len())));
+    }
+}
+
+impl FromLua for LuaShader {
+    fn from_lua(v: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match &v {
+            Value::UserData(ud) => Ok(ud.borrow::<LuaShader>()?.clone()),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "shader".to_string(),
+                message: Some("expected a shader from load_shader".to_string()),
+            }),
+        }
+    }
+}
+
+/// Convert a Lua value into a vec4 uniform slot according to its declared type.
+fn uniform_value(v: &Value, ty: UniformType, name: &str) -> mlua::Result<[f32; 4]> {
+    let mut out = [0.0f32; 4];
+    match v {
+        Value::Number(n) => out[0] = *n as f32,
+        Value::Integer(i) => out[0] = *i as f32,
+        Value::Boolean(b) => out[0] = if *b { 1.0 } else { 0.0 },
+        Value::Table(t) => {
+            for (i, slot) in out.iter_mut().enumerate() {
+                if let Some(x) = t.get::<Option<f64>>(i + 1)? {
+                    *slot = x as f32;
+                }
+            }
+        }
+        other => return Err(rt(format!("uniform '{name}': expected a number or {{x, y, z, w}} table, got {}", other.type_name()))),
+    }
+    let _ = ty;
+    Ok(out)
+}
+
+/// Build the per-draw shader inputs from the opts table.
+fn shader_inputs(mm: &Machine, sh: &LuaShader, opts: Option<&Table>) -> mlua::Result<(ShaderInputs, Option<Rect>)> {
+    let mut inputs = ShaderInputs {
+        time: mm.time() as f32,
+        time_delta: mm.dt as f32,
+        frame: mm.frame as i32,
+        frame_rate: mm.fps as f32,
+        mouse: mm.imouse(),
+        ..Default::default()
+    };
+    if let Some(u) = mm.shader_uniforms.get(&sh.id.0) {
+        inputs.user = *u;
+    }
+    let mut rect = None;
+    if let Some(t) = opts {
+        if let Some(ch) = t.get::<Option<Table>>("channels")? {
+            for i in 0..4 {
+                if let Some(img) = ch.get::<Option<LuaImage>>(i + 1)? {
+                    inputs.channels[i] = Some(img.id);
+                }
+            }
+        }
+        if let Some(r) = t.get::<Option<Table>>("rect")? {
+            let g = |i: i64| -> mlua::Result<f32> { Ok(r.get::<Option<f64>>(i)?.unwrap_or(0.0) as f32) };
+            rect = Some(Rect::new(g(1)?, g(2)?, g(3)?, g(4)?));
+        }
+        if let Some(u) = t.get::<Option<Table>>("uniforms")? {
+            for pair in u.pairs::<String, Value>() {
+                let (name, val) = pair?;
+                match sh.compiled.uniforms.iter().find(|x| x.name == name) {
+                    Some(decl) => inputs.user[decl.slot] = uniform_value(&val, decl.ty, &name)?,
+                    None => return Err(rt(format!("shader has no uniform '{name}' (declare it: uniform float {name};)"))),
+                }
+            }
+        }
+    }
+    Ok((inputs, rect))
 }
 
 /// Playing-voice handle.
@@ -686,6 +773,54 @@ pub fn install(lua: &Lua, m: &M) -> mlua::Result<Vec<&'static str>> {
     def!("set_target", |mm, img: Option<LuaImage>| {
         mm.cmds.push(DrawCmd::SetTarget(img.map(|i| i.id)));
         Ok(())
+    });
+
+    // ---- GPU ----
+    def!("load_shader", |mm, src: String| {
+        // A path if it has no newline and ends in .glsl/.frag; otherwise source.
+        let source = if !src.contains('\n') && (src.ends_with(".glsl") || src.ends_with(".frag") || src.ends_with(".fs")) {
+            mm.jail.read_string(&src).map_err(|e| rt(format!("load_shader: {e}")))?
+        } else {
+            src
+        };
+        let compiled = argon_core::shader::compile(&source).map_err(|e| rt(format!("load_shader: {e}")))?;
+        let id = ShaderId(mm.next_shader);
+        mm.next_shader += 1;
+        mm.shader_uniforms.insert(id.0, [[0.0; 4]; MAX_USER_UNIFORMS]);
+        mm.cmds.push(DrawCmd::CreateShader { id, shader: compiled.clone() });
+        Ok(LuaShader { id, compiled })
+    });
+    def!("draw_shader", |mm, sh: LuaShader, opts: Option<Table>| {
+        let (inputs, rect) = shader_inputs(&mm, &sh, opts.as_ref())?;
+        mm.cmds.push(DrawCmd::DrawShader { id: sh.id, rect, inputs });
+        Ok(())
+    });
+    def!("set_shader", |mm, sh: Option<LuaShader>, opts: Option<Table>| {
+        match sh {
+            Some(sh) => {
+                let (inputs, _) = shader_inputs(&mm, &sh, opts.as_ref())?;
+                mm.cmds.push(DrawCmd::SetShader { id: Some(sh.id), inputs });
+            }
+            None => mm.cmds.push(DrawCmd::SetShader { id: None, inputs: ShaderInputs::default() }),
+        }
+        Ok(())
+    });
+    def!("set_uniform", |mm, sh: LuaShader, name: String, value: Value| {
+        let decl = sh
+            .compiled
+            .uniforms
+            .iter()
+            .find(|x| x.name == name)
+            .ok_or_else(|| rt(format!("shader has no uniform '{name}' (declare it: uniform float {name};)")))?;
+        let v = uniform_value(&value, decl.ty, &name)?;
+        let slots = mm.shader_uniforms.entry(sh.id.0).or_insert([[0.0; 4]; MAX_USER_UNIFORMS]);
+        slots[decl.slot] = v;
+        Ok(())
+    });
+    def!("shader_source", |_mm, name: String| {
+        argon_core::shader::builtin_shader(&name)
+            .map(|s| s.to_string())
+            .ok_or_else(|| rt(format!("no built-in shader '{name}'; try {}", argon_core::shader::BUILTIN_SHADERS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))))
     });
 
     // ---- Sound ----

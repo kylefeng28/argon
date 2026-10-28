@@ -145,6 +145,11 @@ pub struct Machine {
     pub audio: Vec<AudioCmd>,
     pub next_sound: u32,
     pub next_voice: u32,
+    pub next_shader: u32,
+    /// Persistent uniform values set with `set_uniform`, per shader.
+    pub shader_uniforms: HashMap<u32, [[f32; 4]; argon_core::shader::MAX_USER_UNIFORMS]>,
+    /// Last mouse click position, for iMouse.zw.
+    pub click_pos: (f32, f32),
 }
 
 impl Machine {
@@ -180,6 +185,24 @@ impl Machine {
             audio: Vec::new(),
             next_sound: 1,
             next_voice: 1,
+            next_shader: 1,
+            shader_uniforms: HashMap::new(),
+            click_pos: (0.0, 0.0),
+        }
+    }
+
+    /// Shadertoy iMouse from the current input: xy = position (y up), zw =
+    /// click position, z/w negative while the button is up.
+    pub fn imouse(&self) -> [f32; 4] {
+        let m = &self.input.mouse;
+        let y_up = self.height as f32 - m.y;
+        let down = m.down.contains(&argon_core::input::MouseButton::Left);
+        let (cx, cy) = self.click_pos;
+        let cy_up = self.height as f32 - cy;
+        if down {
+            [m.x, y_up, cx.abs(), cy_up.abs()]
+        } else {
+            [m.x, y_up, -cx.abs(), -cy_up.abs()]
         }
     }
 
@@ -231,6 +254,9 @@ impl Machine {
         // Keep the queue bounded if the program never reads keys.
         while self.key_queue.len() > 256 {
             self.key_queue.pop_front();
+        }
+        if ack.input.mouse.pressed.contains(&argon_core::input::MouseButton::Left) {
+            self.click_pos = (ack.input.mouse.x, ack.input.mouse.y);
         }
         self.input = ack.input;
         self.dt = ack.dt;
