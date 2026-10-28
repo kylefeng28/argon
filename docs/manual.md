@@ -61,8 +61,13 @@ THE SHELL
                        into the current folder.
     EXIT               Quit Argon.
 
-    Program names resolve as name, name.lua, or name/main.lua, case-
-    insensitively. DEMOS/ is read-only; COPY a demo to edit it.
+    Program names resolve as name, name.lua, name.glsl or name/main.lua,
+    case-insensitively. DEMOS/ is read-only; COPY a demo to edit it.
+
+    A .glsl file is a program by itself: RUN wraps a Shadertoy-style
+    fragment shader (mainImage) in a full-screen draw loop with the mouse
+    feeding iMouse. NEW name.glsl creates one; the editor highlights GLSL.
+    Header settings use // argon: resolution = "hd". See DEMOS/shadertoy.
 
 THE EDITOR
     EDIT or NEW opens a full-screen editor with Lua syntax highlighting, line

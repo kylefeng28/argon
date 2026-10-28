@@ -158,6 +158,14 @@ pub fn human_size(b: u64) -> String {
     }
 }
 
+/// Template for `NEW name.glsl`: a Shadertoy-style shader that runs as a
+/// program on its own.
+pub fn new_shader_template(name: &str) -> String {
+    format!(
+        "// {name}\n// A Shadertoy-style shader. RUN it directly; the mouse feeds iMouse.\n// Settings: // argon: resolution = \"hd\"\n\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n    vec2 uv = fragCoord / iResolution.xy;\n    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));\n    fragColor = vec4(col, 1.0);\n}}\n"
+    )
+}
+
 /// Template for `NEW name`.
 pub fn new_program_template(name: &str) -> String {
     format!(

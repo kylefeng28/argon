@@ -155,15 +155,15 @@ impl Manifest {
     }
 
     /// Single-file programs may start with lines like
-    /// `-- argon: resolution = "retro"`; each becomes a TOML line.
-    pub fn from_header(lua_src: &str) -> Manifest {
+    /// `-- argon: resolution = "retro"` (Lua) or `// argon: fps = 30` (GLSL);
+    /// each becomes a TOML line.
+    pub fn from_header(src: &str) -> Manifest {
         let mut toml_lines = Vec::new();
-        for line in lua_src.lines().take(32) {
+        for line in src.lines().take(32) {
             let t = line.trim();
-            if let Some(rest) = t.strip_prefix("--").map(str::trim) {
-                if let Some(kv) = rest.strip_prefix("argon:") {
-                    toml_lines.push(kv.trim().to_string());
-                }
+            let rest = t.strip_prefix("--").or_else(|| t.strip_prefix("//")).map(str::trim);
+            if let Some(kv) = rest.and_then(|r| r.strip_prefix("argon:")) {
+                toml_lines.push(kv.trim().to_string());
             }
         }
         if toml_lines.is_empty() {

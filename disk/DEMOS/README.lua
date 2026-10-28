@@ -29,6 +29,7 @@ local lines = {
   "  RUN mandelbrot_gpu / julia_gpu   fractals as GLSL shaders",
   "  RUN raymarch    a Shadertoy-style SDF scene",
   "  RUN shaderfx    post-processing and sprite shaders",
+  "  CD shadertoy    .glsl files run directly: RUN name",
   "",
   "DEMOS is read-only. To make your own version:",
   "  COPY DEMOS/pong mypong      then  EDIT mypong",

@@ -10,13 +10,13 @@ mkdir -p "$OUT"
 cargo build -q
 A=./target/debug/argon
 
-for f in disk/DEMOS/*.lua; do
-  name=$(basename "$f" .lua)
-  "$A" --disk "$DISK" check "DEMOS/$name"
+for f in disk/DEMOS/*.lua disk/DEMOS/shadertoy/*.glsl; do
+  rel=${f#disk/DEMOS/}; rel=${rel%.lua}; rel=${rel%.glsl}
+  "$A" --disk "$DISK" check "DEMOS/$rel"
   # Give input-driven demos something to chew on, then screenshot.
-  "$A" --disk "$DISK" run "DEMOS/$name" --headless --frames 45 \
+  "$A" --disk "$DISK" run "DEMOS/$rel" --headless --frames 45 \
     --keys "{wait:10}abc{enter}{wait:10}{right}{hold:z}{wait:5}{release:z}" \
-    --screenshot "$OUT/demo-$name.png" 2>/dev/null
+    --screenshot "$OUT/demo-${rel//\//-}.png" 2>/dev/null
 done
 
 "$A" --disk "$DISK" shell --headless --frames 30 --keys "help{enter}2^10{enter}dir{enter}" \

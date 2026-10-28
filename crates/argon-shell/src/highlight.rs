@@ -15,6 +15,36 @@ pub const KEYWORDS: &[&str] = &[
     "repeat", "return", "then", "true", "until", "while", "continue", "self",
 ];
 
+/// Source language for highlighting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Lang {
+    #[default]
+    Lua,
+    Glsl,
+}
+
+impl Lang {
+    pub fn from_path(path: &str) -> Lang {
+        if path.to_lowercase().ends_with(".glsl") { Lang::Glsl } else { Lang::Lua }
+    }
+}
+
+pub const GLSL_KEYWORDS: &[&str] = &[
+    "void", "float", "int", "uint", "bool", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "bvec2", "bvec3", "bvec4",
+    "mat2", "mat3", "mat4", "sampler2D", "uniform", "in", "out", "inout", "const", "if", "else", "for", "while", "do",
+    "return", "break", "continue", "discard", "true", "false", "struct", "define", "precision", "highp", "mediump", "lowp",
+];
+
+pub const GLSL_BUILTINS: &[&str] = &[
+    "mainImage", "iResolution", "iTime", "iTimeDelta", "iFrame", "iFrameRate", "iMouse", "iDate", "iChannel0", "iChannel1",
+    "iChannel2", "iChannel3", "iChannelResolution", "fragColor", "fragCoord", "gl_FragCoord", "vUv", "vColor",
+    "sin", "cos", "tan", "asin", "acos", "atan", "pow", "exp", "log", "exp2", "log2", "sqrt", "inversesqrt", "abs", "sign",
+    "floor", "ceil", "fract", "mod", "min", "max", "clamp", "mix", "step", "smoothstep", "length", "distance", "dot",
+    "cross", "normalize", "reflect", "refract", "texture", "textureLod", "texelFetch", "textureSize", "textureTopDown",
+    "dFdx", "dFdy", "fwidth", "radians", "degrees", "sinh", "cosh", "tanh", "round", "trunc", "transpose", "inverse",
+    "determinant", "any", "all", "not", "lessThan", "greaterThan", "equal",
+];
+
 /// State carried between lines: whether we are inside a long comment/string.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum LineState {
@@ -25,7 +55,110 @@ pub enum LineState {
     LongString(u8),
 }
 
-/// Classify each char of `line`. `is_builtin` says whether an identifier is
+/// Classify each char of `line` for the given language. `is_builtin` says
+/// whether an identifier is an API function (Lua).
+pub fn highlight_line_lang(lang: Lang, line: &str, state: LineState, is_builtin: &dyn Fn(&str) -> bool) -> (Vec<Tok>, LineState) {
+    match lang {
+        Lang::Lua => highlight_line(line, state, is_builtin),
+        Lang::Glsl => highlight_glsl_line(line, state),
+    }
+}
+
+/// GLSL: `//` and `/* */` comments, numbers, keywords, well-known builtins.
+pub fn highlight_glsl_line(line: &str, state: LineState) -> (Vec<Tok>, LineState) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut toks = vec![Tok::Plain; chars.len()];
+    let mut i = 0;
+    let mut state = state;
+    while i < chars.len() {
+        if let LineState::LongComment(_) = state {
+            // Inside /* ... */
+            let mut j = i;
+            let mut closed = None;
+            while j + 1 < chars.len() {
+                if chars[j] == '*' && chars[j + 1] == '/' {
+                    closed = Some(j + 2);
+                    break;
+                }
+                j += 1;
+            }
+            match closed {
+                Some(end) => {
+                    for t in &mut toks[i..end] {
+                        *t = Tok::Comment;
+                    }
+                    i = end;
+                    state = LineState::Normal;
+                }
+                None => {
+                    for t in &mut toks[i..] {
+                        *t = Tok::Comment;
+                    }
+                    return (toks, state);
+                }
+            }
+            continue;
+        }
+        let c = chars[i];
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            for t in &mut toks[i..] {
+                *t = Tok::Comment;
+            }
+            return (toks, LineState::Normal);
+        }
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            state = LineState::LongComment(0);
+            toks[i] = Tok::Comment;
+            toks[i + 1] = Tok::Comment;
+            i += 2;
+            continue;
+        }
+        if c == '#' {
+            // Preprocessor line: keyword color for the directive.
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i].is_alphabetic() {
+                i += 1;
+            }
+            for t in &mut toks[start..i] {
+                *t = Tok::Keyword;
+            }
+            continue;
+        }
+        if c.is_ascii_digit() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '.') {
+                i += 1;
+            }
+            for t in &mut toks[start..i] {
+                *t = Tok::Number;
+            }
+            continue;
+        }
+        if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let tok = if GLSL_KEYWORDS.contains(&word.as_str()) {
+                Tok::Keyword
+            } else if GLSL_BUILTINS.contains(&word.as_str()) {
+                Tok::Builtin
+            } else {
+                Tok::Plain
+            };
+            for t in &mut toks[start..i] {
+                *t = tok;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    (toks, state)
+}
+
+/// Classify each char of a Lua `line`. `is_builtin` says whether an identifier is
 /// an API function.
 pub fn highlight_line(line: &str, state: LineState, is_builtin: &dyn Fn(&str) -> bool) -> (Vec<Tok>, LineState) {
     let chars: Vec<char> = line.chars().collect();
@@ -185,6 +318,21 @@ mod tests {
         assert_eq!(t[23], Tok::String);
         assert_eq!(t[28], Tok::Comment);
         assert_eq!(t[t.len() - 1], Tok::Comment);
+    }
+
+    #[test]
+    fn glsl_tokens() {
+        let (t, st) = highlight_glsl_line("vec2 uv = fragCoord / iResolution.xy; // hi", LineState::Normal);
+        assert_eq!(st, LineState::Normal);
+        assert_eq!(t[0], Tok::Keyword);
+        assert_eq!(t[10], Tok::Builtin);
+        assert_eq!(t[t.len() - 1], Tok::Comment);
+        let (_, st) = highlight_glsl_line("/* open", LineState::Normal);
+        assert_eq!(st, LineState::LongComment(0));
+        let (t, st) = highlight_glsl_line("still */ float x = 1.0;", st);
+        assert_eq!(st, LineState::Normal);
+        assert_eq!(t[0], Tok::Comment);
+        assert_eq!(t[9], Tok::Keyword);
     }
 
     #[test]

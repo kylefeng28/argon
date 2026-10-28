@@ -1,6 +1,6 @@
 //! The full-screen program editor (FR-E1 to FR-E6).
 
-use crate::highlight::{highlight_line, LineState, Tok};
+use crate::highlight::{highlight_line_lang, Lang, LineState, Tok};
 use crate::lineedit::{LineAction, LineEdit};
 use crate::menu::{Menu, MenuAction, MenuItem};
 use argon_core::api::{expand_snippet, ApiTable, Category};
@@ -78,6 +78,7 @@ pub struct Editor {
     tab_size: usize,
     /// Desired column when moving vertically through short lines.
     sticky_col: usize,
+    lang: Lang,
 }
 
 impl Editor {
@@ -108,6 +109,7 @@ impl Editor {
             replace_query: String::new(),
             tab_size: tab_size.clamp(1, 8),
             sticky_col: 0,
+            lang: Lang::from_path(path),
         }
     }
 
@@ -877,8 +879,9 @@ impl Editor {
         // Highlight state up to the first visible line.
         let mut state = LineState::Normal;
         let is_builtin = |w: &str| api.get(w).is_some();
+        let lang = self.lang;
         for l in &self.lines[..self.scroll_row.min(self.lines.len())] {
-            state = highlight_line(l, state, &is_builtin).1;
+            state = highlight_line_lang(lang, l, state, &is_builtin).1;
         }
         let sel = self.selection();
 
@@ -889,7 +892,7 @@ impl Editor {
                 continue;
             }
             let line = &self.lines[li];
-            let (toks, next) = highlight_line(line, state, &is_builtin);
+            let (toks, next) = highlight_line_lang(lang, line, state, &is_builtin);
             state = next;
             let num = format!("{:>w$} \u{2502} ", li + 1, w = gutter - 4);
             let num_fg = if li == self.cur.line { theme.accent } else { theme.dim };
@@ -961,7 +964,7 @@ impl Editor {
 /// Does this line start a block that the next line should be indented into?
 fn opens_block(line: &str) -> bool {
     let l = line.trim();
-    if l.is_empty() || l.starts_with("--") {
+    if l.is_empty() || l.starts_with("--") || l.starts_with("//") {
         return false;
     }
     let last_word = l.rsplit(|c: char| !c.is_alphanumeric() && c != '_').find(|w| !w.is_empty()).unwrap_or("");

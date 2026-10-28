@@ -82,6 +82,10 @@ Lua (Luau) file and nothing else unless asked. Follow these rules exactly.
 - Fragment shaders cannot read the screen; draw the scene into an image with
   `set_target(img)` and pass it as a channel for post-processing.
 - Mandelbrot/Julia/raymarching belong in a shader, not in Lua loops.
+- If the whole program is one full-screen shader, write a `.glsl` file
+  containing just `mainImage` (plus helper functions); Argon runs it directly
+  with no Lua. Put the title, source URL and author in `//` comments at the
+  top, and optional settings as `// argon: resolution = "hd"`.
 
 ## Sound
 
@@ -194,6 +198,10 @@ set_target(img) or set_target()  -- Draw into an image instead of the screen; se
 - Fragment shaders cannot read the screen; draw the scene into an image with
   `set_target(img)` and pass it as a channel for post-processing.
 - Mandelbrot/Julia/raymarching belong in a shader, not in Lua loops.
+- If the whole program is one full-screen shader, write a `.glsl` file
+  containing just `mainImage` (plus helper functions); Argon runs it directly
+  with no Lua. Put the title, source URL and author in `//` comments at the
+  top, and optional settings as `// argon: resolution = "hd"`.
 
 ## Sound
 beep(freq, duration [, opts])  -- Play a synth note. opts: wave (square, triangle, saw, sine, noise), volume 0-1, duty, slide (Hz/s), attack, release, pan.

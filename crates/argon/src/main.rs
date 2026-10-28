@@ -109,8 +109,11 @@ fn check(paths: Paths, program: &str) -> anyhow::Result<()> {
     let disk = Jail::new(paths.disk.clone());
     let loc = resolve_program(&disk, "", program).ok_or_else(|| anyhow::anyhow!("program not found: {program}"))?;
     let src = disk.read_string(&loc.main)?;
-    let lua = mlua_check(&src, &loc.main);
-    match lua {
+    let result = match loc.kind {
+        argon_core::vfs::ProgramKind::Lua => mlua_check(&src, &loc.main),
+        argon_core::vfs::ProgramKind::Glsl => argon_core::shader::compile(&src).map(|_| ()).map_err(|e| format!("{}: {e}", loc.main)),
+    };
+    match result {
         Ok(()) => {
             println!("{}: OK", loc.main);
             Ok(())

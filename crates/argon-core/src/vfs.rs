@@ -315,7 +315,16 @@ pub fn file_name(vpath: &str) -> &str {
 }
 
 pub fn strip_lua_ext(name: &str) -> &str {
-    name.strip_suffix(".lua").unwrap_or(name)
+    name.strip_suffix(".lua").or_else(|| name.strip_suffix(".glsl")).unwrap_or(name)
+}
+
+/// What kind of source a program file holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramKind {
+    Lua,
+    /// A bare Shadertoy-style fragment shader; the console wraps it in the
+    /// Lua needed to draw it full-screen.
+    Glsl,
 }
 
 /// Where a program lives once resolved by `RUN`/`EDIT`.
@@ -331,9 +340,11 @@ pub struct ProgramLocation {
     pub is_cart: bool,
     /// Display name (file stem or cart folder name).
     pub name: String,
+    pub kind: ProgramKind,
 }
 
-/// Resolve `RUN name` semantics: `name`, `name.lua`, `name/main.lua`.
+/// Resolve `RUN name` semantics: `name`, `name.lua`, `name.glsl`,
+/// `name/main.lua`.
 pub fn resolve_program(jail: &Jail, cwd: &str, name: &str) -> Option<ProgramLocation> {
     let name = name.trim().trim_end_matches('/');
     if name.is_empty() {
@@ -343,7 +354,7 @@ pub fn resolve_program(jail: &Jail, cwd: &str, name: &str) -> Option<ProgramLoca
         Some(i) => (jail.canonical_vpath(&join(cwd, &name[..i]))?, &name[i + 1..]),
         None => (cwd.to_string(), name),
     };
-    let candidates = [base.to_string(), format!("{base}.lua")];
+    let candidates = [base.to_string(), format!("{base}.lua"), format!("{base}.glsl")];
     for cand in &candidates {
         if let Some(entry) = jail.find_entry(&dir, cand) {
             let vpath = join(&dir, &entry.name);
@@ -357,16 +368,28 @@ pub fn resolve_program(jail: &Jail, cwd: &str, name: &str) -> Option<ProgramLoca
                         manifest: jail.exists(&manifest).then_some(manifest),
                         is_cart: true,
                         name: entry.name.clone(),
+                        kind: ProgramKind::Lua,
                     });
                 }
-            } else if entry.name.to_lowercase().ends_with(".lua") {
-                return Some(ProgramLocation {
-                    main: vpath,
-                    dir: dir.clone(),
-                    manifest: None,
-                    is_cart: false,
-                    name: strip_lua_ext(&entry.name).to_string(),
-                });
+            } else {
+                let lower = entry.name.to_lowercase();
+                let kind = if lower.ends_with(".lua") {
+                    Some(ProgramKind::Lua)
+                } else if lower.ends_with(".glsl") {
+                    Some(ProgramKind::Glsl)
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    return Some(ProgramLocation {
+                        main: vpath,
+                        dir: dir.clone(),
+                        manifest: None,
+                        is_cart: false,
+                        name: strip_lua_ext(&entry.name).to_string(),
+                        kind,
+                    });
+                }
             }
         }
     }
@@ -432,5 +455,8 @@ mod tests {
         let c = resolve_program(&j, "", "shooter").unwrap();
         assert!(c.is_cart && c.manifest.is_some() && c.dir == "shooter");
         assert!(resolve_program(&j, "", "nothing").is_none());
+        j.write("glow.glsl", b"void mainImage(out vec4 c, in vec2 f) {}").unwrap();
+        let g = resolve_program(&j, "", "glow").unwrap();
+        assert_eq!((g.kind, g.main.as_str(), g.name.as_str()), (ProgramKind::Glsl, "glow.glsl", "glow"));
     }
 }

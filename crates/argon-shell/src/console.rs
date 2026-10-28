@@ -8,7 +8,7 @@ use argon_core::api::ApiTable;
 use argon_core::config::{Config, Manifest, Paths};
 use argon_core::draw::DrawCmd;
 use argon_core::input::{InputState, KeyCode, KeyEvent, MouseButton};
-use argon_core::vfs::{self, Jail, ProgramLocation};
+use argon_core::vfs::{self, Jail, ProgramKind, ProgramLocation};
 use argon_core::{Color, TextGrid, Theme, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use argon_audio::{AudioCmd, AudioEngine};
 use argon_lua::machine::{MachineOptions, NoFlip};
@@ -599,6 +599,17 @@ impl Console {
                 return;
             }
         };
+
+        let manifest = match &loc.manifest {
+            Some(m) => self.disk.read_string(m).ok().and_then(|s| Manifest::parse(&s).ok()).unwrap_or_default(),
+            None => Manifest::from_header(&source),
+        };
+
+        // A bare .glsl file runs inside a generated full-screen Lua program.
+        let source = match loc.kind {
+            ProgramKind::Lua => source,
+            ProgramKind::Glsl => argon_lua::glsl_wrapper(&source),
+        };
         let jail = match self.disk.sub(&loc.dir) {
             Ok(j) => j,
             Err(e) => {
@@ -608,13 +619,8 @@ impl Console {
         };
         let save_jail = self.disk.sub("SAVE").ok();
 
-        let manifest = match &loc.manifest {
-            Some(m) => self.disk.read_string(m).ok().and_then(|s| Manifest::parse(&s).ok()).unwrap_or_default(),
-            None => Manifest::from_header(&source),
-        };
-
         let (w, h) = manifest.resolution();
-        let main_name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { format!("{}.lua", loc.name) };
+        let main_name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { vfs::file_name(&loc.main).to_string() };
         let spec = ProgramSpec {
             main_name: main_name.clone(),
             source,
@@ -722,14 +728,15 @@ impl Console {
         match self.resolve(&name) {
             Some(loc) => self.open_editor(loc),
             None => {
-                // Create a new single-file program.
-                let clean = name.trim().trim_end_matches(".lua").to_string();
+                // Create a new single-file program (.lua, or .glsl when asked).
+                let glsl = name.trim().to_lowercase().ends_with(".glsl");
+                let clean = vfs::strip_lua_ext(name.trim()).to_string();
                 if clean.is_empty() || clean.contains(['/', '\\']) && !self.disk.is_dir(&vfs::join(&self.cwd, &vfs::parent(&clean))) {
                     self.print_error(&format!("Cannot create {name}"));
                     return;
                 }
-                let path = vfs::join(&self.cwd, &format!("{clean}.lua"));
-                let template = shell::new_program_template(vfs::file_name(&clean));
+                let path = vfs::join(&self.cwd, &format!("{clean}.{}", if glsl { "glsl" } else { "lua" }));
+                let template = if glsl { shell::new_shader_template(vfs::file_name(&clean)) } else { shell::new_program_template(vfs::file_name(&clean)) };
                 if let Err(e) = self.disk.write(&path, template.as_bytes()) {
                     self.print_error(&e.to_string());
                     return;
@@ -744,7 +751,7 @@ impl Console {
     fn open_editor(&mut self, loc: ProgramLocation) {
         match self.disk.read_string(&loc.main) {
             Ok(text) => {
-                let name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { format!("{}.lua", loc.name) };
+                let name = if loc.is_cart { format!("{}/main.lua", loc.name) } else { vfs::file_name(&loc.main).to_string() };
                 let mut ed = Editor::new(&loc.main, &name, &text, self.config.editor.tab_size);
                 if self.disk.resolve(&loc.main).map(|_| loc.main.to_ascii_uppercase().starts_with("DEMOS/")).unwrap_or(false) {
                     ed.set_status("DEMOS are read-only: COPY it to your own folder to edit", false);
@@ -780,9 +787,10 @@ impl Console {
                 let name = vfs::strip_lua_ext(vfs::file_name(&path)).to_string();
                 let loc = if path.ends_with("/main.lua") {
                     let dir = vfs::parent(&path);
-                    ProgramLocation { main: path.clone(), dir: dir.clone(), manifest: Some(vfs::join(&dir, "cart.toml")).filter(|m| self.disk.exists(m)), is_cart: true, name: vfs::file_name(&dir).to_string() }
+                    ProgramLocation { main: path.clone(), dir: dir.clone(), manifest: Some(vfs::join(&dir, "cart.toml")).filter(|m| self.disk.exists(m)), is_cart: true, name: vfs::file_name(&dir).to_string(), kind: ProgramKind::Lua }
                 } else {
-                    ProgramLocation { main: path.clone(), dir: vfs::parent(&path), manifest: None, is_cart: false, name }
+                    let kind = if path.to_lowercase().ends_with(".glsl") { ProgramKind::Glsl } else { ProgramKind::Lua };
+                    ProgramLocation { main: path.clone(), dir: vfs::parent(&path), manifest: None, is_cart: false, name, kind }
                 };
                 self.start_program(loc, true);
             }
