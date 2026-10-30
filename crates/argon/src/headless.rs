@@ -31,8 +31,12 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
     };
     let mut wait = 0u32;
     let dt = 1.0 / 60.0;
+    if let Some(dir) = &args.record {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut recorded = 0u32;
 
-    for _ in 0..args.frames {
+    for frame in 0..args.frames {
         // Feed script: all keys until the next wait.
         if wait > 0 {
             wait -= 1;
@@ -74,6 +78,13 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
         // for each frame like vsync would instead of queueing hundreds of
         // heavy frames on a software rasterizer.
         renderer.wait_idle();
+        if let Some(dir) = &args.record {
+            let every = args.record_every.max(1);
+            if frame >= args.record_from && (frame - args.record_from) % every == 0 {
+                save_frame(&mut renderer, args.raw, &dir.join(format!("frame-{recorded:05}.png")))?;
+                recorded += 1;
+            }
+        }
         if console.wants_quit() {
             break;
         }
@@ -85,17 +96,25 @@ pub fn run(mut console: Console, args: &HeadlessArgs, program: Option<&str>) -> 
     if args.text {
         println!("{}", console.screen_text());
     }
+    if let Some(dir) = &args.record {
+        eprintln!("recorded {recorded} frames to {}", dir.display());
+    }
     if let Some(path) = &args.screenshot {
-        let (w, h, pixels) = if args.raw {
-            let (w, h) = renderer.size();
-            (w, h, renderer.read_framebuffer())
-        } else {
-            let scale = renderer.display_scale();
-            renderer.read_display(scale)
-        };
-        let img = image::RgbaImage::from_raw(w, h, pixels).ok_or_else(|| anyhow::anyhow!("bad framebuffer size"))?;
-        img.save(path)?;
+        let (w, h) = save_frame(&mut renderer, args.raw, path)?;
         eprintln!("wrote {} ({w}x{h})", path.display());
     }
     Ok(())
+}
+
+fn save_frame(renderer: &mut Renderer, raw: bool, path: &std::path::Path) -> anyhow::Result<(u32, u32)> {
+    let (w, h, pixels) = if raw {
+        let (w, h) = renderer.size();
+        (w, h, renderer.read_framebuffer())
+    } else {
+        let scale = renderer.display_scale();
+        renderer.read_display(scale)
+    };
+    let img = image::RgbaImage::from_raw(w, h, pixels).ok_or_else(|| anyhow::anyhow!("bad framebuffer size"))?;
+    img.save(path)?;
+    Ok((w, h))
 }

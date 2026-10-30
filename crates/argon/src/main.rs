@@ -69,6 +69,16 @@ struct HeadlessArgs {
     /// Write the raw framebuffer instead of the filtered display
     #[arg(long)]
     raw: bool,
+    /// Also write frames to this folder as frame-00000.png, ... (headless),
+    /// for turning into a GIF or video with ffmpeg
+    #[arg(long)]
+    record: Option<PathBuf>,
+    /// With --record, keep every Nth frame (2 = 30 fps)
+    #[arg(long, default_value_t = 2)]
+    record_every: u32,
+    /// With --record, skip this many frames first
+    #[arg(long, default_value_t = 0)]
+    record_from: u32,
 }
 
 fn main() -> anyhow::Result<()> {

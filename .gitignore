@@ -2,6 +2,7 @@
 /tools/node_modules
 /tools/out
 *.png
+!docs/media/*.png
 !assets/**/*.png
 !disk/**/*.png
 

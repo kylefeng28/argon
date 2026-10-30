@@ -7,6 +7,15 @@ A fantasy console. Embrace the soft flickering glow of neon vacuum tubes.
 - DCPU from [0x10c](https://en.wikipedia.org/wiki/0x10c)
 - Retro systems like Commodore 64 and ZX Spectrum
 
+## Gallery
+
+| | | |
+|---|---|---|
+| ![A million GPU particles](docs/media/particles_gpu.gif) | ![Conway's Game of Life](docs/media/life.gif) | ![GPU Julia set](docs/media/julia_gpu.gif) |
+| ![Raymarched SDF scene](docs/media/raymarch.gif) | ![Strange attractor](docs/media/attractor.gif) | ![Tactical HUD](docs/media/hud.gif) |
+| ![Matrix rain](docs/media/matrix.gif) | ![Korobeiniki chiptune](docs/media/chiptune.gif) | ![Software 3D cube](docs/media/cube.gif) |
+| ![The shell](docs/media/shell.png) | ![The editor with the F1 catalog](docs/media/editor.png) | ![Flocking boids](docs/media/flock.gif) |
+
 ## Status
 
 Phase 0 is implemented (see `docs/requirements.md` section 9 for phasing):
@@ -86,6 +95,8 @@ tools/smoke.sh                    # run every demo and screenshot shell/editor
 The GPU tests and the headless runner need any Vulkan/Metal/DX12 adapter; a
 software one is fine. `tools/headless-env.sh` points wgpu at the SwiftShader
 driver bundled with Playwright's Chromium if present.
+
+Regenerate screenshots/gifs in `docs/media` with `tools/media.sh` (needs ffmpeg).
 
 ## Documents
 
